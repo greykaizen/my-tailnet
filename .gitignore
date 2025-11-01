@@ -1,4 +1,9 @@
-.kiro
+.kiro/
+.idea/
+*.swp
+*.swo
+*.pyc
+*.pyo
 
 # Ansible sensitive files
 .vault_pass
