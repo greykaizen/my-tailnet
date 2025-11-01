@@ -1,0 +1,10 @@
+# Example vault password file
+# Copy this file to .vault_pass and add your actual vault password
+# The .vault_pass file is excluded from git for security
+
+# To create your vault password file:
+# 1. Copy this file: cp .vault_pass.example .vault_pass
+# 2. Edit .vault_pass and replace this content with your actual password
+# 3. Encrypt the vault: ansible-vault encrypt vars/vault.yml
+
+your_secure_vault_password_here

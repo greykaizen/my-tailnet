@@ -1,0 +1,53 @@
+# Linux Group Variables
+# Configuration specific to Linux hosts in the tailnet
+
+# Connection Configuration
+ansible_connection: ssh
+ansible_user: ansible_admin
+ansible_port: 22
+ansible_become: true
+ansible_become_method: sudo
+
+# Linux-specific paths and settings
+linux_hostname: "lab-pc-linux"
+smb_mount_path: "/mnt/TeamShare"
+smb_credentials_path: "/etc/smbcredentials"
+
+# Group Configuration
+smb_users_group: "smb-users"
+smb_users_gid: 1100
+sftp_users_group: "sftp-users"
+sftp_users_gid: 1101
+
+# SMB Mount Configuration
+smb_mount_options: "credentials={{ smb_credentials_path }},vers=3.0,uid=0,gid={{ smb_users_gid }},file_mode=0755,dir_mode=0755,_netdev,nounix,x-systemd.automount,x-systemd.after=tailscaled.service,x-systemd.after=network-online.target"
+smb_mount_type: "cifs"
+
+# SFTP Fallback Configuration
+sftp_mount_script_path: "/usr/local/bin/mount-sftp-share.sh"
+sftp_helper_scripts:
+  - "mount-sftp-share.sh"
+  - "umount-sftp-share.sh"
+
+# Package Management
+required_packages:
+  - "cifs-utils"
+  - "sshfs"
+  - "curl"
+
+# Sudoers Configuration
+sudoers_mount_commands:
+  - "/bin/mount"
+  - "/bin/umount"
+  - "/usr/bin/mount"
+  - "/usr/bin/umount"
+
+# Boot Notification Configuration
+telegram_notification_enabled: true
+boot_script_path: "/usr/local/bin/boot-notify.sh"
+systemd_service_name: "tailnet-boot-notify"
+systemd_service_path: "/etc/systemd/system/{{ systemd_service_name }}.service"
+
+# Tailscale Configuration
+tailscale_ssh_enabled: true
+tailscale_service_name: "tailscaled"

@@ -1,0 +1,66 @@
+# Encrypted Vault File - Contains all sensitive data
+# Use: ansible-vault encrypt vars/vault.yml
+# Edit: ansible-vault edit vars/vault.yml
+
+# Team User Accounts
+# Individual accounts for each team member with consistent UIDs
+team_users:
+  - username: alice
+    password: "SecurePassword123!"
+    uid: 1001
+    full_name: "Alice Johnson"
+    email: "alice@company.com"
+  - username: bob
+    password: "SecurePassword456!"
+    uid: 1002
+    full_name: "Bob Smith"
+    email: "bob@company.com"
+  - username: charlie
+    password: "SecurePassword789!"
+    uid: 1003
+    full_name: "Charlie Brown"
+    email: "charlie@company.com"
+
+# Service Account Credentials
+service_accounts:
+  smbmount:
+    username: smbmount
+    password: "SMBMount_SecurePass_2024!"
+    description: "Service account for Linux SMB mounting"
+  ansible_admin:
+    username: ansible_admin
+    password: "AnsibleAdmin_SecurePass_2024!"
+    description: "Ansible automation management account"
+
+# Windows Administrator Account (for initial WinRM provisioning)
+vault_windows_admin_password: "WindowsAdmin_TempPass_2024!"
+
+# Tailscale Configuration
+vault_tailscale_authkey: "tskey-auth-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+tailscale_tailnet: "company-tailnet.ts.net"
+
+# Telegram Bot Configuration
+vault_telegram_bot_token: "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijk"
+vault_telegram_chat_id: "-1001234567890"
+
+# SSH Key Management
+# Note: Private keys are generated at runtime and not stored in vault
+ssh_key_type: "ed25519"
+ssh_key_bits: 256
+ssh_key_comment: "ansible_admin@tailnet-automation"
+
+# Security Configuration
+password_policy:
+  min_length: 12
+  require_uppercase: true
+  require_lowercase: true
+  require_numbers: true
+  require_special_chars: true
+
+# Network Security
+allowed_networks:
+  tailscale_range: "100.64.0.0/10"
+  local_range: "192.168.0.0/16"
+
+# Backup Configuration
+vault_backup_encryption_key: "BackupEncryption_Key_2024_SecureRandom!"

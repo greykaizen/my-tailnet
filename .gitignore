@@ -1,0 +1,20 @@
+.kiro
+
+# Ansible sensitive files
+.vault_pass
+*.retry
+ansible.log
+
+# SSH keys (runtime generated)
+*_key
+*_key.pub
+*.pem
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+
+# Backup files
+*.bak
+*~

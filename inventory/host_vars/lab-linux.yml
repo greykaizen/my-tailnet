@@ -1,0 +1,61 @@
+# Lab Linux Host Variables  
+# Host-specific configuration for the Linux lab PC
+
+# Host Identity
+inventory_hostname: lab-linux
+ansible_host: lab-linux.tailnet-domain.ts.net
+
+# Connection Parameters
+ansible_connection: ssh
+ansible_port: 22
+ansible_user: ansible_admin
+ansible_ssh_private_key_file: ~/.ssh/ansible_admin_key
+
+# System Configuration
+distribution: "{{ ansible_distribution | lower }}"
+package_manager: "{{ 'apt' if ansible_os_family == 'Debian' else 'yum' if ansible_os_family == 'RedHat' else 'pacman' }}"
+
+# Network Configuration
+tailscale_hostname: "lab-linux"
+expected_tailscale_ip: "100.64.0.11"  # Example IP, will be assigned by Tailscale
+
+# File System Configuration
+mount_points:
+  - path: "{{ smb_mount_path }}"
+    src: "//{{ hostvars['lab-windows']['ansible_host'] }}/{{ smb_share_name }}"
+    fstype: "{{ smb_mount_type }}"
+    opts: "{{ smb_mount_options }}"
+    state: mounted
+
+# User Home Directories
+user_home_base: "/home"
+user_shell: "/bin/bash"
+
+# System Services
+required_services:
+  - "ssh"
+  - "tailscaled"
+  - "{{ systemd_service_name }}"
+
+# Package Installation
+package_install_commands:
+  apt: "apt-get update && apt-get install -y"
+  yum: "yum install -y"
+  pacman: "pacman -S --noconfirm"
+
+# Security Configuration
+ssh_config:
+  port: 22
+  permit_root_login: false
+  password_authentication: false
+  pubkey_authentication: true
+  allow_users:
+    - "ansible_admin"
+    - "@{{ smb_users_group }}"
+    - "@{{ sftp_users_group }}"
+
+# Backup and Recovery
+backup_paths:
+  - "{{ smb_mount_path }}"
+  - "/usr/local/bin"
+  - "/etc/systemd/system/{{ systemd_service_name }}.service"

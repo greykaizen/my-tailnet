@@ -1,0 +1,55 @@
+# Lab Windows Host Variables
+# Host-specific configuration for the Windows lab PC
+
+# Host Identity
+inventory_hostname: lab-windows
+ansible_host: lab-windows.tailnet-domain.ts.net
+
+# Connection Parameters for Dual-Mode Provisioning
+# Phase 1: WinRM (Initial Provisioning)
+winrm_connection:
+  ansible_connection: winrm
+  ansible_winrm_transport: basic
+  ansible_winrm_server_cert_validation: ignore
+  ansible_port: 5985
+  ansible_user: Administrator
+  ansible_password: "{{ vault_windows_admin_password }}"
+
+# Phase 2: SSH (Ongoing Management) 
+ssh_connection:
+  ansible_connection: ssh
+  ansible_shell_type: powershell
+  ansible_port: 22
+  ansible_user: ansible_admin
+  ansible_ssh_private_key_file: ~/.ssh/ansible_admin_key
+
+# Hardware Configuration
+system_drive: "C:"
+data_drive: "D:"
+shared_folder_drive: "{{ data_drive }}"
+
+# Network Configuration
+tailscale_hostname: "lab-windows"
+expected_tailscale_ip: "100.64.0.10"  # Example IP, will be assigned by Tailscale
+
+# Windows-specific Services
+required_windows_features:
+  - "SMB1Protocol-Server"  # Will be disabled for security
+  - "SMB1Protocol-Client"  # Will be disabled for security
+
+chocolatey_packages:
+  - "openssh"
+  - "tailscale"
+
+# Security Hardening
+security_policies:
+  disable_guest_account: true
+  require_smb_encryption: true
+  disable_smb_v1: true
+  disable_smb_v2: true
+  enable_windows_firewall: true
+
+# Backup and Recovery
+backup_paths:
+  - "{{ windows_shared_path }}"
+  - "C:\\Scripts"
