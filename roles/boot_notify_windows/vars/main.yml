@@ -1,0 +1,12 @@
+---
+# Boot Notify Windows Role Variables
+
+# Telegram configuration
+telegram_bot_token: "{{ vault_telegram_bot_token }}"
+telegram_chat_id: "{{ vault_telegram_chat_id }}"
+
+# Scheduled task configuration
+task_name: "BootNotification"
+task_description: "Send boot notification to Telegram"
+script_path: "C:\\Scripts\\boot-notify.ps1"
+script_dir: "C:\\Scripts"

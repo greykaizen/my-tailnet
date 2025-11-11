@@ -1,0 +1,55 @@
+---
+# Boot Notify Windows Role - Scheduled Task Boot Notification
+
+- name: Create Scripts directory
+  ansible.windows.win_file:
+    path: "{{ script_dir }}"
+    state: directory
+
+- name: Deploy boot notification PowerShell script
+  ansible.windows.win_copy:
+    src: boot-notify.ps1
+    dest: "{{ script_path }}"
+
+- name: Configure Telegram credentials in script
+  ansible.windows.win_shell: |
+    $content = Get-Content "{{ script_path }}" -Raw
+    $content = $content -replace '\$TELEGRAM_BOT_TOKEN', "{{ telegram_bot_token }}"
+    $content = $content -replace '\$TELEGRAM_CHAT_ID', "{{ telegram_chat_id }}"
+    Set-Content "{{ script_path }}" -Value $content
+  no_log: true
+
+- name: Create scheduled task for boot notification
+  community.windows.win_scheduled_task:
+    name: "{{ task_name }}"
+    description: "{{ task_description }}"
+    actions:
+      - path: 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+        arguments: '-ExecutionPolicy Bypass -File "{{ script_path }}"'
+    triggers:
+      - type: boot
+        delay: PT2M
+    username: SYSTEM
+    run_level: highest
+    state: present
+    enabled: true
+
+- name: Verify scheduled task was created
+  ansible.windows.win_shell: |
+    Get-ScheduledTask -TaskName "{{ task_name }}" | Select-Object TaskName, State, @{Name='NextRunTime';Expression={(Get-ScheduledTaskInfo -TaskName $_.TaskName).NextRunTime}}
+  register: task_verification
+  changed_when: false
+
+- name: Display boot notification setup status
+  ansible.builtin.debug:
+    msg: |
+      Boot notification scheduled task configured successfully.
+      Task Name: {{ task_name }}
+      Script: {{ script_path }}
+      Trigger: On system boot (2 minute delay)
+      Status: Enabled
+      
+      To test manually: powershell.exe -ExecutionPolicy Bypass -File "{{ script_path }}"
+      
+      Task Details:
+      {{ task_verification.stdout }}
