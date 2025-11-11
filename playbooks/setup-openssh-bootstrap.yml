@@ -22,24 +22,28 @@
           
           1. Open PowerShell as Administrator
           
-          2. Install OpenSSH Server using Windows Optional Feature:
+          2. Install OpenSSH Server (choose ONE method):
+          
+             METHOD A - Via winget (RECOMMENDED - latest version):
+             winget install --id Microsoft.OpenSSH.Beta --silent --accept-package-agreements --accept-source-agreements
+          
+             METHOD B - Via Windows Optional Feature (fallback - bundled version):
              Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
           
-          3. Install OpenSSH Client (optional but recommended):
-             Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
-          
-          4. Start and enable SSH service:
+          3. Start and enable SSH service:
              Start-Service sshd
              Set-Service -Name sshd -StartupType Automatic
           
-          5. Configure Windows Firewall (if needed):
+          4. Configure Windows Firewall (if needed):
              New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
           
-          6. Verify SSH is running:
+          5. Verify SSH is running:
              Get-Service sshd
           
-          NOTE: OpenSSH is a built-in Windows feature since Windows 10 1809 and Windows Server 2019.
-          No third-party package managers (Chocolatey, winget) are required!
+          NOTE: 
+          - winget provides the latest OpenSSH version (9.x) with newest features and security updates
+          - Windows Optional Feature provides OpenSSH 8.x (older but stable)
+          - The automation will try winget first, then fall back to Optional Feature if winget is unavailable
           
           ========================================
           AFTER BOOTSTRAP COMPLETION
