@@ -1,0 +1,167 @@
+---
+# Master Orchestration Playbook
+# Coordinates complete deployment of tailnet automation system
+
+- name: Display deployment banner
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Show deployment start message
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          TAILNET AUTOMATION DEPLOYMENT
+          ========================================
+          
+          Starting complete system deployment...
+          
+          This playbook will:
+          1. Create user accounts on Windows and Linux
+          2. Install and configure Tailscale VPN
+          3. Set up file sharing (SMB + SFTP fallback)
+          4. Deploy boot notification systems
+          
+          ========================================
+
+- name: Phase 1 - User Account Management
+  hosts: all
+  gather_facts: true
+  
+  tasks:
+    - name: Display Phase 1 banner
+      ansible.builtin.debug:
+        msg: "Phase 1: Creating user accounts..."
+      run_once: true
+
+- name: Create Windows user accounts
+  hosts: windows_group
+  gather_facts: true
+  
+  roles:
+    - role: windows_users
+      tags: ['users', 'windows']
+
+- name: Create Linux user accounts
+  hosts: linux_group
+  gather_facts: true
+  
+  roles:
+    - role: linux_users
+      tags: ['users', 'linux']
+
+- name: Phase 2 - Tailscale VPN Setup
+  hosts: all
+  gather_facts: true
+  
+  tasks:
+    - name: Display Phase 2 banner
+      ansible.builtin.debug:
+        msg: "Phase 2: Installing and configuring Tailscale..."
+      run_once: true
+
+- name: Install and configure Tailscale
+  hosts: all
+  gather_facts: true
+  
+  roles:
+    - role: tailscale_setup
+      tags: ['tailscale', 'vpn']
+
+- name: Configure OpenSSH on Windows
+  hosts: windows_group
+  gather_facts: true
+  
+  roles:
+    - role: openssh_setup_windows
+      tags: ['openssh', 'windows', 'ssh']
+
+- name: Phase 3 - File Sharing Setup
+  hosts: all
+  gather_facts: true
+  
+  tasks:
+    - name: Display Phase 3 banner
+      ansible.builtin.debug:
+        msg: "Phase 3: Configuring file sharing systems..."
+      run_once: true
+
+- name: Create SMB share on Windows
+  hosts: windows_group
+  gather_facts: true
+  
+  roles:
+    - role: samba_share
+      tags: ['file-sharing', 'smb', 'windows']
+
+- name: Mount SMB share on Linux
+  hosts: linux_group
+  gather_facts: true
+  
+  roles:
+    - role: samba_mount
+      tags: ['file-sharing', 'smb', 'linux']
+
+- name: Configure SFTP fallback on Linux
+  hosts: linux_group
+  gather_facts: true
+  
+  roles:
+    - role: sftp_mount_fallback
+      tags: ['file-sharing', 'sftp', 'linux']
+
+- name: Phase 4 - Boot Notification System
+  hosts: all
+  gather_facts: true
+  
+  tasks:
+    - name: Display Phase 4 banner
+      ansible.builtin.debug:
+        msg: "Phase 4: Deploying boot notification systems..."
+      run_once: true
+
+- name: Configure boot notifications on Linux
+  hosts: linux_group
+  gather_facts: true
+  
+  roles:
+    - role: boot_notify_linux
+      tags: ['boot-notify', 'linux', 'monitoring']
+
+- name: Configure boot notifications on Windows
+  hosts: windows_group
+  gather_facts: true
+  
+  roles:
+    - role: boot_notify_windows
+      tags: ['boot-notify', 'windows', 'monitoring']
+
+- name: Deployment Complete
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Display deployment summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          DEPLOYMENT COMPLETE
+          ========================================
+          
+          ✅ All phases completed successfully!
+          
+          What was deployed:
+          • User accounts on Windows and Linux
+          • Tailscale VPN with SSH access
+          • OpenSSH configuration on Windows
+          • SMB file sharing (Windows → Linux)
+          • SFTP fallback access
+          • Boot notification systems
+          
+          Next steps:
+          1. Verify deployment: ansible-playbook playbooks/validate-acls.yml -i inventory/hosts.ini --ask-vault-pass
+          2. Test file sharing: Access \\lab-windows\TeamShare from Windows or /mnt/TeamShare from Linux
+          3. Test SSH access: ssh <username>@<tailscale-ip>
+          4. Monitor boot notifications in Telegram
+          
+          ========================================

@@ -1,0 +1,139 @@
+---
+# Preflight Checks Playbook
+# Validates environment prerequisites before deployment
+
+- name: Preflight Checks - All Hosts
+  hosts: all
+  gather_facts: true
+  
+  tasks:
+    - name: Display preflight check banner
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          PREFLIGHT CHECKS
+          ========================================
+          Running pre-deployment validation...
+
+- name: Preflight Checks - Windows Hosts
+  hosts: windows_group
+  gather_facts: true
+  
+  tasks:
+    - name: Check Windows SSH connectivity
+      ansible.builtin.ping:
+      register: windows_ping
+
+    - name: Verify Windows SSH access via ansible_admin
+      ansible.builtin.win_shell: |
+        whoami
+      register: windows_user
+      ignore_errors: true
+
+    - name: Check disk space on Windows
+      ansible.windows.win_shell: |
+        $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+        $freeGB = [math]::Round($disk.FreeSpace / 1GB, 2)
+        Write-Output $freeGB
+      register: windows_disk
+
+    - name: Verify Windows disk space is adequate
+      ansible.builtin.assert:
+        that:
+          - windows_disk.stdout | float > 10
+        fail_msg: "Insufficient disk space on Windows ({{ windows_disk.stdout | float }} GB free). Need at least 10 GB."
+        success_msg: "Windows disk space OK ({{ windows_disk.stdout | float }} GB free)"
+
+    - name: Display Windows preflight results
+      ansible.builtin.debug:
+        msg: |
+          ✅ Windows Host: {{ inventory_hostname }}
+          • SSH Connectivity: OK
+          • Current User: {{ windows_user.stdout | default('N/A') | trim }}
+          • Free Disk Space: {{ windows_disk.stdout | float }} GB
+
+- name: Preflight Checks - Linux Hosts
+  hosts: linux_group
+  gather_facts: true
+  
+  tasks:
+    - name: Check Linux SSH connectivity
+      ansible.builtin.ping:
+      register: linux_ping
+
+    - name: Check disk space on Linux
+      ansible.builtin.shell: |
+        df -BG / | awk 'NR==2 {print $4}' | sed 's/G//'
+      register: linux_disk
+      changed_when: false
+
+    - name: Verify Linux disk space is adequate
+      ansible.builtin.assert:
+        that:
+          - linux_disk.stdout | int > 10
+        fail_msg: "Insufficient disk space on Linux ({{ linux_disk.stdout }} GB free). Need at least 10 GB."
+        success_msg: "Linux disk space OK ({{ linux_disk.stdout }} GB free)"
+
+    - name: Check if Tailscale is already installed
+      ansible.builtin.command: which tailscale
+      register: tailscale_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display Linux preflight results
+      ansible.builtin.debug:
+        msg: |
+          ✅ Linux Host: {{ inventory_hostname }}
+          • SSH Connectivity: OK
+          • Free Disk Space: {{ linux_disk.stdout }} GB
+          • Tailscale: {{ 'Already installed' if tailscale_check.rc == 0 else 'Not installed (will be installed)' }}
+
+- name: Preflight Checks - Vault Validation
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Check if vault file exists
+      ansible.builtin.stat:
+        path: vars/vault.yml
+      register: vault_file
+
+    - name: Verify vault file is encrypted
+      ansible.builtin.shell: |
+        head -n 1 vars/vault.yml | grep -q 'ANSIBLE_VAULT' && echo "encrypted" || echo "not_encrypted"
+      register: vault_encryption
+      changed_when: false
+      when: vault_file.stat.exists
+
+    - name: Display vault status
+      ansible.builtin.debug:
+        msg: |
+          {% if not vault_file.stat.exists %}
+          ❌ Vault file not found at vars/vault.yml
+          {% elif vault_encryption.stdout == 'not_encrypted' %}
+          ❌ Vault file is NOT encrypted! Run: ansible-vault encrypt vars/vault.yml
+          {% else %}
+          ✅ Vault file exists and is encrypted
+          {% endif %}
+
+    - name: Fail if vault is not properly configured
+      ansible.builtin.fail:
+        msg: "Vault file is missing or not encrypted. Please fix before proceeding."
+      when: not vault_file.stat.exists or vault_encryption.stdout == 'not_encrypted'
+
+- name: Preflight Checks - Summary
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Display preflight summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          PREFLIGHT CHECKS COMPLETE
+          ========================================
+          
+          ✅ All preflight checks passed!
+          
+          You can now proceed with deployment:
+          ansible-playbook playbooks/setup-all.yml -i inventory/hosts.ini --ask-vault-pass
