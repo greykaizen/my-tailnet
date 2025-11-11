@@ -1,0 +1,82 @@
+---
+# OpenSSH Bootstrap Playbook
+# PREREQUISITE: Manual OpenSSH installation on Windows
+# This playbook documents the bootstrap process and verifies SSH connectivity
+
+- name: OpenSSH Bootstrap Documentation and Verification
+  hosts: windows_group
+  gather_facts: false
+  
+  tasks:
+    - name: Display OpenSSH bootstrap instructions
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          MANUAL OPENSSH BOOTSTRAP REQUIRED
+          ========================================
+          
+          Before running the main provisioning playbooks, you must manually install
+          OpenSSH on Windows systems. This is a ONE-TIME setup step.
+          
+          STEPS TO PERFORM ON WINDOWS (as Administrator):
+          
+          1. Open PowerShell as Administrator
+          
+          2. Install Chocolatey (if not already installed):
+             Set-ExecutionPolicy Bypass -Scope Process -Force
+             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+             iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          
+          3. Install OpenSSH via Chocolatey:
+             choco install openssh -y
+          
+          4. Start and enable SSH service:
+             Start-Service sshd
+             Set-Service -Name sshd -StartupType Automatic
+          
+          5. Configure Windows Firewall (if needed):
+             New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+          
+          6. Verify SSH is running:
+             Get-Service sshd
+          
+          ========================================
+          AFTER BOOTSTRAP COMPLETION
+          ========================================
+          
+          Run this playbook again to verify SSH connectivity.
+          Then proceed with the main setup-all.yml playbook.
+
+    - name: Test SSH connectivity to Windows host
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 10
+        state: started
+      delegate_to: localhost
+      register: ssh_check
+      ignore_errors: true
+
+    - name: Display SSH connectivity status
+      ansible.builtin.debug:
+        msg: |
+          {% if ssh_check.failed %}
+          ❌ SSH NOT ACCESSIBLE
+          
+          SSH port 22 is not reachable on {{ ansible_host }}.
+          Please complete the manual OpenSSH bootstrap steps above.
+          {% else %}
+          ✅ SSH IS ACCESSIBLE
+          
+          SSH port 22 is reachable on {{ ansible_host }}.
+          You can now proceed with the main provisioning playbooks.
+          
+          Next steps:
+          1. Run preflight checks: ansible-playbook playbooks/preflight-checks.yml -i inventory/hosts.ini --ask-vault-pass
+          2. Run main setup: ansible-playbook playbooks/setup-all.yml -i inventory/hosts.ini --ask-vault-pass
+          {% endif %}
+
+    - name: Fail if SSH is not accessible
+      ansible.builtin.fail:
+        msg: "SSH is not accessible. Please complete the manual OpenSSH bootstrap steps."
+      when: ssh_check.failed
