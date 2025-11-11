@@ -1,0 +1,53 @@
+# Windows Group Variables - SSH Mode (Ongoing Management)
+# Configuration for Phase 2: Post-provisioning SSH-based management
+# Requirements: 2.5, 6.3
+
+# SSH Connection Configuration
+ansible_connection: ssh
+ansible_shell_type: powershell
+ansible_port: 22
+ansible_user: ansible_admin
+ansible_ssh_private_key_file: ~/.ssh/ansible_admin_key
+ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+# Windows-specific paths and settings
+windows_hostname: "lab-pc-windows"
+windows_shared_drive: "D"
+windows_shared_path: "D:\\Shared"
+windows_shared_folders:
+  - "Projects"
+  - "Data" 
+  - "Archive"
+
+# SMB Share Configuration
+smb_share_name: "TeamShare"
+smb_share_path: "{{ windows_shared_path }}"
+smb_encryption: true
+smb_version: "3.0"
+
+# User and Group Configuration
+windows_admin_group: "Administrators"
+windows_team_group: "TeamShare"
+windows_power_users_group: "Power Users"
+
+# Service Account Configuration
+smbmount_account: "smbmount"
+ansible_admin_account: "ansible_admin"
+
+# Security Configuration
+disable_guest_account: true
+enable_smb_encryption: true
+disable_smb_v1_v2: true
+
+# Firewall Configuration
+allow_ssh_port: 22
+restrict_smb_to_tailscale: true
+
+# Boot Notification Configuration
+telegram_notification_enabled: true
+boot_script_path: "C:\\Scripts\\boot-notify.ps1"
+scheduled_task_name: "TailnetBootNotify"
+
+# Provisioning Mode Indicator
+provisioning_mode: "ssh"
+provisioning_phase: "ongoing"
