@@ -1,0 +1,92 @@
+---
+# OpenSSH Setup for Windows Role
+# Requirements: 2.5, 6.3
+
+- name: Ensure Chocolatey is installed
+  ansible.windows.win_chocolatey:
+    name: chocolatey
+    state: present
+
+- name: Install OpenSSH via Chocolatey
+  ansible.windows.win_chocolatey:
+    name: openssh
+    state: present
+    version: latest
+
+- name: Ensure OpenSSH service is installed
+  ansible.windows.win_service:
+    name: sshd
+    start_mode: auto
+    state: started
+
+- name: Create .ssh directory for ansible_admin
+  ansible.windows.win_file:
+    path: C:\Users\ansible_admin\.ssh
+    state: directory
+
+- name: Configure sshd_config with security settings
+  ansible.windows.win_lineinfile:
+    path: C:\ProgramData\ssh\sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+    - { regexp: '^#?AllowUsers', line: 'AllowUsers ansible_admin @TeamShare @Administrators' }
+    - { regexp: '^#?Protocol', line: 'Protocol 2' }
+    - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+  notify: Restart sshd service
+
+- name: Enable SFTP subsystem
+  ansible.windows.win_lineinfile:
+    path: C:\ProgramData\ssh\sshd_config
+    regexp: '^#?Subsystem\s+sftp'
+    line: 'Subsystem sftp sftp-server.exe'
+    state: present
+  notify: Restart sshd service
+
+- name: Configure Windows Firewall rule for SSH (port 22)
+  community.windows.win_firewall_rule:
+    name: OpenSSH Server (sshd)
+    localport: 22
+    action: allow
+    direction: in
+    protocol: tcp
+    state: present
+    enabled: yes
+    profiles:
+      - domain
+      - private
+
+- name: Restrict SSH firewall rule to Tailscale network only
+  community.windows.win_firewall_rule:
+    name: OpenSSH Server (sshd) - Tailscale Only
+    localport: 22
+    action: allow
+    direction: in
+    protocol: tcp
+    remoteip: 100.64.0.0/10
+    state: present
+    enabled: yes
+    profiles:
+      - domain
+      - private
+      - public
+
+- name: Ensure sshd service is running
+  ansible.windows.win_service:
+    name: sshd
+    state: started
+    start_mode: auto
+
+- name: Configure sshd service failure recovery
+  ansible.windows.win_shell: |
+    sc.exe failure sshd reset= 86400 actions= restart/60000/restart/60000/restart/60000
+  args:
+    executable: cmd

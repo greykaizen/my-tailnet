@@ -1,0 +1,6 @@
+---
+# Tailscale Setup Role Variables
+# The tailscale_authkey should be provided from vault.yml
+
+# Tailscale configuration
+tailscale_authkey: "{{ vault_tailscale_authkey }}"

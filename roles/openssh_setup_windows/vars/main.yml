@@ -1,0 +1,15 @@
+---
+# OpenSSH Setup Windows Role Variables
+
+# SSH configuration settings
+ssh_port: 22
+ssh_protocol: 2
+max_auth_tries: 3
+client_alive_interval: 300
+client_alive_count_max: 2
+
+# Allowed users for SSH access
+ssh_allowed_users:
+  - ansible_admin
+  - "@TeamShare"
+  - "@Administrators"

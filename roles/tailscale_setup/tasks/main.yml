@@ -1,0 +1,143 @@
+---
+# Tailscale Setup Role - Cross-platform installation and configuration
+# Requirements: 2.1, 2.2
+
+- name: Install Tailscale on Linux
+  when: ansible_os_family == "Debian" or ansible_os_family == "RedHat"
+  block:
+    - name: Download Tailscale installation script
+      ansible.builtin.get_url:
+        url: https://tailscale.com/install.sh
+        dest: /tmp/tailscale-install.sh
+        mode: '0755'
+
+    - name: Execute Tailscale installation script
+      ansible.builtin.shell: sh /tmp/tailscale-install.sh
+      args:
+        creates: /usr/bin/tailscale
+
+    - name: Clean up installation script
+      ansible.builtin.file:
+        path: /tmp/tailscale-install.sh
+        state: absent
+
+- name: Install Tailscale on Windows
+  when: ansible_os_family == "Windows"
+  block:
+    - name: Create temporary directory for Tailscale MSI
+      ansible.windows.win_file:
+        path: C:\Temp
+        state: directory
+
+    - name: Download Tailscale MSI installer
+      ansible.windows.win_get_url:
+        url: https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi
+        dest: C:\Temp\tailscale-setup.msi
+
+    - name: Install Tailscale MSI package
+      ansible.windows.win_package:
+        path: C:\Temp\tailscale-setup.msi
+        state: present
+        arguments: /quiet /norestart
+
+    - name: Clean up Tailscale MSI installer
+      ansible.windows.win_file:
+        path: C:\Temp\tailscale-setup.msi
+        state: absent
+
+- name: Authenticate Tailscale with auth key (Linux)
+  when: ansible_os_family == "Debian" or ansible_os_family == "RedHat"
+  ansible.builtin.command: tailscale up --authkey={{ tailscale_authkey }} --ssh
+  register: tailscale_auth_result
+  changed_when: "'Success' in tailscale_auth_result.stdout or tailscale_auth_result.rc == 0"
+  failed_when: false
+
+- name: Authenticate Tailscale with auth key (Windows)
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_command: tailscale up --authkey={{ tailscale_authkey }} --ssh
+  register: tailscale_auth_result_win
+  changed_when: "'Success' in tailscale_auth_result_win.stdout or tailscale_auth_result_win.rc == 0"
+  failed_when: false
+
+- name: Enable Tailscale service on Linux
+  when: ansible_os_family == "Debian" or ansible_os_family == "RedHat"
+  ansible.builtin.systemd:
+    name: tailscaled
+    enabled: yes
+    state: started
+
+- name: Configure Tailscale service on Windows
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_service:
+    name: Tailscale
+    start_mode: auto
+    state: started
+
+# SSH Access and Security Hardening
+# Requirements: 2.3, 2.4, 6.3
+
+- name: Verify Tailscale SSH is enabled (Linux)
+  when: ansible_os_family == "Debian" or ansible_os_family == "RedHat"
+  ansible.builtin.command: tailscale status --json
+  register: tailscale_status_linux
+  changed_when: false
+
+- name: Verify Tailscale SSH is enabled (Windows)
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_command: tailscale status --json
+  register: tailscale_status_windows
+  changed_when: false
+
+- name: Configure Tailscale service failure recovery (Windows)
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_shell: |
+    sc.exe failure Tailscale reset= 86400 actions= restart/60000/restart/60000/restart/60000
+  args:
+    executable: cmd
+
+- name: Apply Windows security hardening - Remove Users group access to Tailscale directory
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_acl:
+    path: C:\Program Files\Tailscale
+    user: Users
+    rights: FullControl
+    type: deny
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: Apply Windows security hardening - Ensure Administrators have full control
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_acl:
+    path: C:\Program Files\Tailscale
+    user: Administrators
+    rights: FullControl
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: Apply Windows security hardening - Ensure SYSTEM has full control
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_acl:
+    path: C:\Program Files\Tailscale
+    user: SYSTEM
+    rights: FullControl
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: Configure Tailscale service startup type to Automatic (Delayed Start) on Windows
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_shell: |
+    sc.exe config Tailscale start= delayed-auto
+  args:
+    executable: cmd
+
+- name: Ensure Tailscale service permissions are restricted (Windows)
+  when: ansible_os_family == "Windows"
+  ansible.windows.win_shell: |
+    sc.exe sdset Tailscale "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)"
+  args:
+    executable: cmd

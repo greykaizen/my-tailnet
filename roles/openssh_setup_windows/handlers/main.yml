@@ -1,0 +1,7 @@
+---
+# OpenSSH Setup Windows Role Handlers
+
+- name: Restart sshd service
+  ansible.windows.win_service:
+    name: sshd
+    state: restarted

@@ -1,0 +1,26 @@
+---
+# Tailscale Installation and Configuration Playbook
+# This playbook installs Tailscale on both Windows and Linux systems
+# Requirements: 2.1, 2.2, 2.3, 2.4, 6.3
+
+- name: Install and configure Tailscale on all systems
+  hosts: all
+  gather_facts: true
+  vars_files:
+    - ../vars/vault.yml
+
+  tasks:
+    - name: Include tailscale_setup role
+      ansible.builtin.include_role:
+        name: tailscale_setup
+
+- name: Configure OpenSSH on Windows systems
+  hosts: windows_group
+  gather_facts: true
+  vars_files:
+    - ../vars/vault.yml
+
+  tasks:
+    - name: Include openssh_setup_windows role
+      ansible.builtin.include_role:
+        name: openssh_setup_windows
