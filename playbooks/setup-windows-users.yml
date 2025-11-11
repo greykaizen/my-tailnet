@@ -1,0 +1,42 @@
+---
+# Windows User Management Playbook
+# Creates team member accounts, ansible_admin, TeamShare group, and smbmount service account
+
+- name: Setup Windows user accounts and groups
+  hosts: windows_group
+  gather_facts: true
+  vars_files:
+    - ../vars/vault.yml
+
+  tasks:
+    - name: Display target host information
+      ansible.builtin.debug:
+        msg: "Configuring Windows users on {{ inventory_hostname }}"
+
+    - name: Include windows_users role
+      ansible.builtin.include_role:
+        name: windows_users
+
+    - name: Verify TeamShare group exists
+      ansible.windows.win_shell: |
+        Get-LocalGroup -Name "{{ windows_team_group }}" | Select-Object Name, Description
+      register: teamshare_group_check
+      changed_when: false
+
+    - name: Display TeamShare group information
+      ansible.builtin.debug:
+        var: teamshare_group_check.stdout_lines
+
+    - name: Verify team member accounts exist
+      ansible.windows.win_shell: |
+        Get-LocalUser -Name "{{ item.username }}" | Select-Object Name, Enabled, Description
+      loop: "{{ team_users }}"
+      register: user_check
+      changed_when: false
+
+    - name: Display user account information
+      ansible.builtin.debug:
+        msg: "User {{ item.item.username }}: {{ item.stdout_lines }}"
+      loop: "{{ user_check.results }}"
+      loop_control:
+        label: "{{ item.item.username }}"

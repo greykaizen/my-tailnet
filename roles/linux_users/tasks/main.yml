@@ -1,0 +1,93 @@
+---
+# Linux User Management Role
+# Creates team member accounts with consistent UIDs, groups, and sudoers configuration
+
+- name: Create smb-users group
+  ansible.builtin.group:
+    name: "{{ smb_users_group }}"
+    gid: "{{ smb_users_gid }}"
+    state: present
+
+- name: Create sftp-users group
+  ansible.builtin.group:
+    name: "{{ sftp_users_group }}"
+    gid: "{{ sftp_users_gid }}"
+    state: present
+
+- name: Create team member accounts with consistent UIDs
+  ansible.builtin.user:
+    name: "{{ item.username }}"
+    uid: "{{ item.uid }}"
+    comment: "{{ item.full_name | default(item.username) }}"
+    shell: /bin/bash
+    groups:
+      - "{{ smb_users_group }}"
+      - "{{ sftp_users_group }}"
+    append: true
+    create_home: true
+    state: present
+  loop: "{{ team_users }}"
+
+- name: Set passwords for team member accounts
+  ansible.builtin.user:
+    name: "{{ item.username }}"
+    password: "{{ item.password | password_hash('sha512') }}"
+    update_password: on_create
+  loop: "{{ team_users }}"
+  no_log: true
+
+- name: Create ansible_admin account
+  ansible.builtin.user:
+    name: "{{ service_accounts.ansible_admin.username }}"
+    comment: "{{ service_accounts.ansible_admin.description }}"
+    shell: /bin/bash
+    groups:
+      - sudo
+    append: true
+    create_home: true
+    state: present
+
+- name: Set password for ansible_admin account
+  ansible.builtin.user:
+    name: "{{ service_accounts.ansible_admin.username }}"
+    password: "{{ service_accounts.ansible_admin.password | password_hash('sha512') }}"
+    update_password: on_create
+  no_log: true
+
+- name: Configure sudoers for mount operations
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/smb-mount-operations
+    content: |
+      # Allow smb-users group to mount/umount without password
+      # Required for SMB share mounting operations
+      %{{ smb_users_group }} ALL=(ALL) NOPASSWD: {{ sudoers_mount_commands | join(', ') }}
+    mode: '0440'
+    validate: 'visudo -cf %s'
+
+- name: Configure sudoers for ansible_admin
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/ansible-admin
+    content: |
+      # Allow ansible_admin full sudo access without password
+      # Required for Ansible automation operations
+      {{ service_accounts.ansible_admin.username }} ALL=(ALL) NOPASSWD: ALL
+    mode: '0440'
+    validate: 'visudo -cf %s'
+
+- name: Ensure .ssh directory exists for ansible_admin
+  ansible.builtin.file:
+    path: "/home/{{ service_accounts.ansible_admin.username }}/.ssh"
+    state: directory
+    owner: "{{ service_accounts.ansible_admin.username }}"
+    group: "{{ service_accounts.ansible_admin.username }}"
+    mode: '0700'
+
+- name: Display user creation summary
+  ansible.builtin.debug:
+    msg:
+      - "Linux user management completed:"
+      - "  - Created {{ team_users | length }} team member accounts with consistent UIDs"
+      - "  - Created smb-users group (gid: {{ smb_users_gid }})"
+      - "  - Created sftp-users group (gid: {{ sftp_users_gid }})"
+      - "  - Created ansible_admin account with sudo access"
+      - "  - Configured sudoers for mount operations"

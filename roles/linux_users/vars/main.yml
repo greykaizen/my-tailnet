@@ -1,0 +1,20 @@
+---
+# Linux Users Role Variables
+# These variables are loaded from vault and group_vars
+
+# Default values (overridden by group_vars/linux_group.yml)
+smb_users_group: "smb-users"
+smb_users_gid: 1100
+sftp_users_group: "sftp-users"
+sftp_users_gid: 1101
+
+# Sudoers mount commands (overridden by group_vars/linux_group.yml)
+sudoers_mount_commands:
+  - "/bin/mount"
+  - "/bin/umount"
+  - "/usr/bin/mount"
+  - "/usr/bin/umount"
+
+# User and service account data loaded from vars/vault.yml:
+# - team_users (list of team member accounts with UIDs)
+# - service_accounts.ansible_admin

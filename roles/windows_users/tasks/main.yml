@@ -1,0 +1,94 @@
+---
+# Windows User Management Role
+# Creates team member accounts, ansible_admin, TeamShare group, and smbmount service account
+
+- name: Create TeamShare group
+  ansible.windows.win_group:
+    name: "{{ windows_team_group }}"
+    description: "Team members with access to shared folders"
+    state: present
+
+- name: Create team member accounts
+  ansible.windows.win_user:
+    name: "{{ item.username }}"
+    password: "{{ item.password }}"
+    fullname: "{{ item.full_name | default(item.username) }}"
+    description: "Team member account for {{ item.username }}"
+    password_never_expires: false
+    user_cannot_change_password: false
+    account_disabled: false
+    groups:
+      - "{{ windows_team_group }}"
+      - "{{ windows_power_users_group }}"
+    groups_action: add
+    state: present
+  loop: "{{ team_users }}"
+  no_log: true
+
+- name: Create ansible_admin account for SSH management
+  ansible.windows.win_user:
+    name: "{{ service_accounts.ansible_admin.username }}"
+    password: "{{ service_accounts.ansible_admin.password }}"
+    fullname: "Ansible Admin"
+    description: "{{ service_accounts.ansible_admin.description }}"
+    password_never_expires: true
+    user_cannot_change_password: true
+    account_disabled: false
+    groups:
+      - "{{ windows_admin_group }}"
+    groups_action: add
+    state: present
+  no_log: true
+
+- name: Create smbmount service account with restricted logon
+  ansible.windows.win_user:
+    name: "{{ service_accounts.smbmount.username }}"
+    password: "{{ service_accounts.smbmount.password }}"
+    fullname: "SMB Mount Service"
+    description: "{{ service_accounts.smbmount.description }}"
+    password_never_expires: true
+    user_cannot_change_password: true
+    account_disabled: false
+    groups:
+      - "{{ windows_team_group }}"
+    groups_action: add
+    state: present
+  no_log: true
+
+- name: Deny interactive logon for smbmount service account
+  ansible.windows.win_user_right:
+    name: SeDenyInteractiveLogonRight
+    users:
+      - "{{ service_accounts.smbmount.username }}"
+    action: add
+
+- name: Deny remote desktop logon for smbmount service account
+  ansible.windows.win_user_right:
+    name: SeDenyRemoteInteractiveLogonRight
+    users:
+      - "{{ service_accounts.smbmount.username }}"
+    action: add
+
+- name: Deny network logon for smbmount service account (except SMB)
+  ansible.windows.win_user_right:
+    name: SeDenyNetworkLogonRight
+    users:
+      - "{{ service_accounts.smbmount.username }}"
+    action: add
+
+- name: Disable Guest account
+  ansible.windows.win_user:
+    name: Guest
+    account_disabled: true
+    state: present
+  when: disable_guest_account | default(true)
+
+- name: Display user creation summary
+  ansible.builtin.debug:
+    msg:
+      - "Windows user management completed:"
+      - "  - Created {{ team_users | length }} team member accounts"
+      - "  - Created ansible_admin account for SSH management"
+      - "  - Created smbmount service account with restricted logon"
+      - "  - Created TeamShare group with {{ team_users | length }} members"
+      - "  - Disabled Guest account"

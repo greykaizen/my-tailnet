@@ -1,0 +1,72 @@
+---
+# Linux User Management Playbook
+# Creates team member accounts with consistent UIDs, groups, and sudoers configuration
+
+- name: Setup Linux user accounts and groups
+  hosts: linux_group
+  gather_facts: true
+  become: true
+  vars_files:
+    - ../vars/vault.yml
+
+  tasks:
+    - name: Display target host information
+      ansible.builtin.debug:
+        msg: "Configuring Linux users on {{ inventory_hostname }}"
+
+    - name: Include linux_users role
+      ansible.builtin.include_role:
+        name: linux_users
+
+    - name: Verify smb-users group exists
+      ansible.builtin.command: getent group {{ smb_users_group }}
+      register: smb_group_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display smb-users group information
+      ansible.builtin.debug:
+        var: smb_group_check.stdout
+
+    - name: Verify sftp-users group exists
+      ansible.builtin.command: getent group {{ sftp_users_group }}
+      register: sftp_group_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display sftp-users group information
+      ansible.builtin.debug:
+        var: sftp_group_check.stdout
+
+    - name: Verify team member accounts exist
+      ansible.builtin.command: id {{ item.username }}
+      loop: "{{ team_users }}"
+      register: user_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display user account information
+      ansible.builtin.debug:
+        msg: "User {{ item.item.username }}: {{ item.stdout }}"
+      loop: "{{ user_check.results }}"
+      loop_control:
+        label: "{{ item.item.username }}"
+
+    - name: Verify ansible_admin account exists
+      ansible.builtin.command: id {{ service_accounts.ansible_admin.username }}
+      register: ansible_admin_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display ansible_admin account information
+      ansible.builtin.debug:
+        var: ansible_admin_check.stdout
+
+    - name: Verify sudoers configuration
+      ansible.builtin.command: ls -la /etc/sudoers.d/
+      register: sudoers_check
+      changed_when: false
+
+    - name: Display sudoers configuration
+      ansible.builtin.debug:
+        var: sudoers_check.stdout_lines
