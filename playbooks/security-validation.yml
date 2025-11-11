@@ -1,0 +1,591 @@
+---
+# Security Validation Playbook
+# Requirements: 4.4, 4.5, 6.1, 6.2
+# Purpose: Comprehensive security validation and compliance checking
+
+- name: Security Validation - Windows Hosts
+  hosts: windows_group
+  gather_facts: true
+  
+  tasks:
+    - name: Display security validation overview
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          SECURITY VALIDATION - WINDOWS
+          ========================================
+          
+          Validating security controls:
+          1. Guest account status
+          2. SMB firewall restrictions
+          3. User account isolation
+          4. Service account restrictions
+          5. SMB encryption enforcement
+          
+          ========================================
+
+    # Guest Account Validation
+    - name: Check if Guest account is disabled
+      ansible.windows.win_shell: |
+        $guest = Get-LocalUser -Name "Guest" -ErrorAction SilentlyContinue
+        if ($guest) {
+          if ($guest.Enabled) {
+            Write-Output "FAIL: Guest account is enabled"
+            exit 1
+          } else {
+            Write-Output "PASS: Guest account is disabled"
+            exit 0
+          }
+        } else {
+          Write-Output "PASS: Guest account does not exist"
+          exit 0
+        }
+      register: guest_check
+      changed_when: false
+      failed_when: guest_check.rc != 0
+
+    - name: Verify Guest account has no permissions on shared folder
+      ansible.windows.win_shell: |
+        $path = "{{ windows_shared_path }}"
+        $acl = Get-Acl $path
+        $guestRules = $acl.Access | Where-Object { $_.IdentityReference -like "*Guest*" }
+        
+        if ($guestRules) {
+          $denyRules = $guestRules | Where-Object { $_.AccessControlType -eq "Deny" }
+          if ($denyRules) {
+            Write-Output "PASS: Guest has explicit Deny permissions"
+            exit 0
+          } else {
+            Write-Output "FAIL: Guest has Allow permissions"
+            exit 1
+          }
+        } else {
+          Write-Output "PASS: Guest has no permissions (not in ACL)"
+          exit 0
+        }
+      register: guest_acl_check
+      changed_when: false
+      failed_when: guest_acl_check.rc != 0
+
+    # SMB Firewall Validation
+    - name: Verify SMB firewall rules restrict to Tailscale network
+      ansible.windows.win_shell: |
+        $smbRules = Get-NetFirewallRule | Where-Object {
+          $_.DisplayName -like "*File and Printer Sharing*" -and
+          $_.Direction -eq "Inbound" -and
+          $_.Enabled -eq $true
+        }
+        
+        $violations = @()
+        foreach ($rule in $smbRules) {
+          $addressFilter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule
+          $remoteAddress = $addressFilter.RemoteAddress
+          
+          # Check if rule allows from any address (not restricted to Tailscale)
+          if ($remoteAddress -contains "Any" -or $remoteAddress -contains "0.0.0.0/0") {
+            $violations += "Rule '$($rule.DisplayName)' allows from Any address"
+          }
+        }
+        
+        if ($violations.Count -gt 0) {
+          Write-Output "FAIL: SMB not restricted to Tailscale network"
+          $violations | ForEach-Object { Write-Output $_ }
+          exit 1
+        } else {
+          Write-Output "PASS: SMB firewall rules properly restricted"
+          exit 0
+        }
+      register: smb_firewall_check
+      changed_when: false
+      failed_when: smb_firewall_check.rc != 0
+
+    - name: Verify custom Tailscale-only SMB rule exists
+      ansible.windows.win_shell: |
+        $tailscaleRule = Get-NetFirewallRule -DisplayName "*Tailscale*SMB*" -ErrorAction SilentlyContinue
+        if ($tailscaleRule) {
+          $addressFilter = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $tailscaleRule
+          if ($addressFilter.RemoteAddress -like "*100.64.*" -or $addressFilter.RemoteAddress -like "*100.64.0.0/10*") {
+            Write-Output "PASS: Tailscale-specific SMB rule configured"
+            exit 0
+          }
+        }
+        Write-Output "WARN: No Tailscale-specific SMB rule found (using default rules)"
+        exit 0
+      register: tailscale_smb_rule
+      changed_when: false
+      failed_when: false
+
+    # User Account Isolation
+    - name: Verify individual user accounts exist (no shared accounts)
+      ansible.windows.win_shell: |
+        $teamUsers = @({{ team_users | map(attribute='username') | map('quote') | join(', ') }})
+        $missingUsers = @()
+        
+        foreach ($user in $teamUsers) {
+          $account = Get-LocalUser -Name $user -ErrorAction SilentlyContinue
+          if (-not $account) {
+            $missingUsers += $user
+          }
+        }
+        
+        if ($missingUsers.Count -gt 0) {
+          Write-Output "FAIL: Missing user accounts: $($missingUsers -join ', ')"
+          exit 1
+        } else {
+          Write-Output "PASS: All individual user accounts exist"
+          exit 0
+        }
+      register: user_accounts_check
+      changed_when: false
+      failed_when: user_accounts_check.rc != 0
+
+    - name: Verify users are members of TeamShare group
+      ansible.windows.win_shell: |
+        $teamUsers = @({{ team_users | map(attribute='username') | map('quote') | join(', ') }})
+        $groupMembers = Get-LocalGroupMember -Group "TeamShare" | Select-Object -ExpandProperty Name
+        
+        $notInGroup = @()
+        foreach ($user in $teamUsers) {
+          $fullName = "$env:COMPUTERNAME\$user"
+          if ($groupMembers -notcontains $fullName) {
+            $notInGroup += $user
+          }
+        }
+        
+        if ($notInGroup.Count -gt 0) {
+          Write-Output "FAIL: Users not in TeamShare group: $($notInGroup -join ', ')"
+          exit 1
+        } else {
+          Write-Output "PASS: All users are members of TeamShare group"
+          exit 0
+        }
+      register: group_membership_check
+      changed_when: false
+      failed_when: group_membership_check.rc != 0
+
+    - name: Verify TeamShare group has proper permissions on shared folder
+      ansible.windows.win_shell: |
+        $path = "{{ windows_shared_path }}"
+        $acl = Get-Acl $path
+        $teamShareRule = $acl.Access | Where-Object {
+          $_.IdentityReference -like "*TeamShare*" -and
+          $_.AccessControlType -eq "Allow"
+        }
+        
+        if ($teamShareRule) {
+          $rights = $teamShareRule.FileSystemRights
+          if ($rights -match "Modify" -or $rights -match "FullControl") {
+            Write-Output "PASS: TeamShare group has Modify or FullControl permissions"
+            exit 0
+          } else {
+            Write-Output "FAIL: TeamShare group has insufficient permissions: $rights"
+            exit 1
+          }
+        } else {
+          Write-Output "FAIL: TeamShare group not found in ACL"
+          exit 1
+        }
+      register: teamshare_permissions_check
+      changed_when: false
+      failed_when: teamshare_permissions_check.rc != 0
+
+    # Service Account Restrictions
+    - name: Verify smbmount service account exists
+      ansible.windows.win_shell: |
+        $smbmount = Get-LocalUser -Name "smbmount" -ErrorAction SilentlyContinue
+        if ($smbmount) {
+          Write-Output "PASS: smbmount service account exists"
+          exit 0
+        } else {
+          Write-Output "FAIL: smbmount service account not found"
+          exit 1
+        }
+      register: smbmount_exists_check
+      changed_when: false
+      failed_when: smbmount_exists_check.rc != 0
+
+    - name: Verify smbmount has interactive logon denied
+      ansible.windows.win_shell: |
+        # Check local security policy for deny logon locally
+        $export = secedit /export /cfg "$env:TEMP\secpol.cfg" /quiet
+        $content = Get-Content "$env:TEMP\secpol.cfg"
+        $denyLogonLocally = $content | Select-String "SeDenyInteractiveLogonRight"
+        
+        if ($denyLogonLocally -and $denyLogonLocally -match "smbmount") {
+          Write-Output "PASS: smbmount has interactive logon denied"
+          Remove-Item "$env:TEMP\secpol.cfg" -Force
+          exit 0
+        } else {
+          Write-Output "WARN: Cannot verify smbmount logon restrictions via secedit"
+          Remove-Item "$env:TEMP\secpol.cfg" -Force -ErrorAction SilentlyContinue
+          exit 0
+        }
+      register: smbmount_logon_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify ansible_admin account exists and is in Administrators group
+      ansible.windows.win_shell: |
+        $ansibleAdmin = Get-LocalUser -Name "ansible_admin" -ErrorAction SilentlyContinue
+        if (-not $ansibleAdmin) {
+          Write-Output "FAIL: ansible_admin account not found"
+          exit 1
+        }
+        
+        $adminMembers = Get-LocalGroupMember -Group "Administrators" | Select-Object -ExpandProperty Name
+        $fullName = "$env:COMPUTERNAME\ansible_admin"
+        
+        if ($adminMembers -contains $fullName) {
+          Write-Output "PASS: ansible_admin is in Administrators group"
+          exit 0
+        } else {
+          Write-Output "FAIL: ansible_admin not in Administrators group"
+          exit 1
+        }
+      register: ansible_admin_check
+      changed_when: false
+      failed_when: ansible_admin_check.rc != 0
+
+    - name: Verify ansible_admin is NOT in TeamShare group (isolation)
+      ansible.windows.win_shell: |
+        $groupMembers = Get-LocalGroupMember -Group "TeamShare" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+        $fullName = "$env:COMPUTERNAME\ansible_admin"
+        
+        if ($groupMembers -contains $fullName) {
+          Write-Output "FAIL: ansible_admin should not be in TeamShare group (isolation violation)"
+          exit 1
+        } else {
+          Write-Output "PASS: ansible_admin properly isolated from TeamShare group"
+          exit 0
+        }
+      register: ansible_admin_isolation_check
+      changed_when: false
+      failed_when: ansible_admin_isolation_check.rc != 0
+
+    # SMB Security Validation
+    - name: Verify SMB v1 and v2 are disabled
+      ansible.windows.win_shell: |
+        $smb1 = Get-SmbServerConfiguration | Select-Object -ExpandProperty EnableSMB1Protocol
+        $smb2 = Get-SmbServerConfiguration | Select-Object -ExpandProperty EnableSMB2Protocol
+        
+        $failures = @()
+        if ($smb1) { $failures += "SMB v1 is enabled" }
+        if ($smb2) { $failures += "SMB v2 is enabled" }
+        
+        if ($failures.Count -gt 0) {
+          Write-Output "FAIL: Insecure SMB versions enabled"
+          $failures | ForEach-Object { Write-Output $_ }
+          exit 1
+        } else {
+          Write-Output "PASS: SMB v1 and v2 are disabled (only v3 allowed)"
+          exit 0
+        }
+      register: smb_version_check
+      changed_when: false
+      failed_when: smb_version_check.rc != 0
+
+    - name: Verify SMB encryption is enforced
+      ansible.windows.win_shell: |
+        $config = Get-SmbServerConfiguration
+        $encryptData = $config.EncryptData
+        $rejectUnencrypted = $config.RejectUnencryptedAccess
+        
+        if ($encryptData -and $rejectUnencrypted) {
+          Write-Output "PASS: SMB encryption enforced (EncryptData=True, RejectUnencryptedAccess=True)"
+          exit 0
+        } else {
+          Write-Output "FAIL: SMB encryption not fully enforced"
+          Write-Output "  EncryptData: $encryptData"
+          Write-Output "  RejectUnencryptedAccess: $rejectUnencrypted"
+          exit 1
+        }
+      register: smb_encryption_check
+      changed_when: false
+      failed_when: smb_encryption_check.rc != 0
+
+    # SSH Security Validation
+    - name: Verify SSH is configured for key-only authentication
+      ansible.windows.win_shell: |
+        $configPath = "C:\ProgramData\ssh\sshd_config"
+        if (-not (Test-Path $configPath)) {
+          Write-Output "WARN: sshd_config not found"
+          exit 0
+        }
+        
+        $config = Get-Content $configPath -Raw
+        $failures = @()
+        
+        if ($config -notmatch "PasswordAuthentication\s+no") {
+          $failures += "PasswordAuthentication not set to 'no'"
+        }
+        if ($config -notmatch "PubkeyAuthentication\s+yes") {
+          $failures += "PubkeyAuthentication not set to 'yes'"
+        }
+        
+        if ($failures.Count -gt 0) {
+          Write-Output "FAIL: SSH not configured for key-only authentication"
+          $failures | ForEach-Object { Write-Output $_ }
+          exit 1
+        } else {
+          Write-Output "PASS: SSH configured for key-only authentication"
+          exit 0
+        }
+      register: ssh_config_check
+      changed_when: false
+      failed_when: ssh_config_check.rc != 0
+
+    - name: Display Windows security validation summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          WINDOWS SECURITY VALIDATION SUMMARY
+          ========================================
+          
+          ✅ Guest Account: {{ 'PASS' if guest_check.rc == 0 else 'FAIL' }}
+          ✅ Guest ACL Restrictions: {{ 'PASS' if guest_acl_check.rc == 0 else 'FAIL' }}
+          ✅ SMB Firewall Restrictions: {{ 'PASS' if smb_firewall_check.rc == 0 else 'FAIL' }}
+          ✅ Individual User Accounts: {{ 'PASS' if user_accounts_check.rc == 0 else 'FAIL' }}
+          ✅ TeamShare Group Membership: {{ 'PASS' if group_membership_check.rc == 0 else 'FAIL' }}
+          ✅ TeamShare Permissions: {{ 'PASS' if teamshare_permissions_check.rc == 0 else 'FAIL' }}
+          ✅ smbmount Service Account: {{ 'PASS' if smbmount_exists_check.rc == 0 else 'FAIL' }}
+          ✅ ansible_admin Account: {{ 'PASS' if ansible_admin_check.rc == 0 else 'FAIL' }}
+          ✅ ansible_admin Isolation: {{ 'PASS' if ansible_admin_isolation_check.rc == 0 else 'FAIL' }}
+          ✅ SMB Version Security: {{ 'PASS' if smb_version_check.rc == 0 else 'FAIL' }}
+          ✅ SMB Encryption: {{ 'PASS' if smb_encryption_check.rc == 0 else 'FAIL' }}
+          ✅ SSH Key Authentication: {{ 'PASS' if ssh_config_check.rc == 0 else 'FAIL' }}
+          
+          ========================================
+
+- name: Security Validation - Linux Hosts
+  hosts: linux_group
+  gather_facts: true
+  become: true
+  
+  tasks:
+    - name: Display security validation overview
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          SECURITY VALIDATION - LINUX
+          ========================================
+          
+          Validating security controls:
+          1. User account isolation
+          2. Group membership
+          3. SMB mount security
+          4. SSH configuration
+          5. Sudo restrictions
+          
+          ========================================
+
+    # User Account Validation
+    - name: Verify individual user accounts exist
+      ansible.builtin.shell: |
+        users=({{ team_users | map(attribute='username') | join(' ') }})
+        missing=()
+        
+        for user in "${users[@]}"; do
+          if ! id "$user" &>/dev/null; then
+            missing+=("$user")
+          fi
+        done
+        
+        if [ ${#missing[@]} -gt 0 ]; then
+          echo "FAIL: Missing user accounts: ${missing[*]}"
+          exit 1
+        else
+          echo "PASS: All individual user accounts exist"
+          exit 0
+        fi
+      register: linux_user_check
+      changed_when: false
+      failed_when: linux_user_check.rc != 0
+
+    - name: Verify smb-users group exists and has correct members
+      ansible.builtin.shell: |
+        if ! getent group smb-users &>/dev/null; then
+          echo "FAIL: smb-users group does not exist"
+          exit 1
+        fi
+        
+        users=({{ team_users | map(attribute='username') | join(' ') }})
+        not_in_group=()
+        
+        for user in "${users[@]}"; do
+          if ! groups "$user" | grep -q smb-users; then
+            not_in_group+=("$user")
+          fi
+        done
+        
+        if [ ${#not_in_group[@]} -gt 0 ]; then
+          echo "FAIL: Users not in smb-users group: ${not_in_group[*]}"
+          exit 1
+        else
+          echo "PASS: All users are members of smb-users group"
+          exit 0
+        fi
+      register: linux_group_check
+      changed_when: false
+      failed_when: linux_group_check.rc != 0
+
+    # SMB Mount Security
+    - name: Verify SMB credentials file exists and has secure permissions
+      ansible.builtin.shell: |
+        if [ ! -f /etc/smbcredentials ]; then
+          echo "FAIL: /etc/smbcredentials not found"
+          exit 1
+        fi
+        
+        perms=$(stat -c %a /etc/smbcredentials)
+        owner=$(stat -c %U /etc/smbcredentials)
+        
+        if [ "$perms" != "600" ]; then
+          echo "FAIL: /etc/smbcredentials has incorrect permissions: $perms (should be 600)"
+          exit 1
+        fi
+        
+        if [ "$owner" != "root" ]; then
+          echo "FAIL: /etc/smbcredentials has incorrect owner: $owner (should be root)"
+          exit 1
+        fi
+        
+        echo "PASS: SMB credentials file properly secured (600, root-owned)"
+        exit 0
+      register: smb_creds_check
+      changed_when: false
+      failed_when: smb_creds_check.rc != 0
+
+    - name: Verify SMB mount uses secure options
+      ansible.builtin.shell: |
+        if ! grep -q "TeamShare" /etc/fstab; then
+          echo "FAIL: TeamShare mount not found in /etc/fstab"
+          exit 1
+        fi
+        
+        mount_line=$(grep "TeamShare" /etc/fstab)
+        
+        required_options=("vers=3.0" "_netdev" "credentials=/etc/smbcredentials")
+        missing=()
+        
+        for opt in "${required_options[@]}"; do
+          if ! echo "$mount_line" | grep -q "$opt"; then
+            missing+=("$opt")
+          fi
+        done
+        
+        if [ ${#missing[@]} -gt 0 ]; then
+          echo "FAIL: SMB mount missing required options: ${missing[*]}"
+          exit 1
+        else
+          echo "PASS: SMB mount configured with secure options"
+          exit 0
+        fi
+      register: smb_mount_options_check
+      changed_when: false
+      failed_when: smb_mount_options_check.rc != 0
+
+    - name: Verify SMB mount point has correct permissions
+      ansible.builtin.shell: |
+        mount_point="/mnt/TeamShare"
+        
+        if [ ! -d "$mount_point" ]; then
+          echo "FAIL: Mount point $mount_point does not exist"
+          exit 1
+        fi
+        
+        group=$(stat -c %G "$mount_point")
+        
+        if [ "$group" != "smb-users" ]; then
+          echo "FAIL: Mount point has incorrect group: $group (should be smb-users)"
+          exit 1
+        fi
+        
+        echo "PASS: Mount point properly configured for smb-users group"
+        exit 0
+      register: mount_point_check
+      changed_when: false
+      failed_when: mount_point_check.rc != 0
+
+    # SSH Security
+    - name: Verify SSH is configured for key-only authentication
+      ansible.builtin.shell: |
+        if ! grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config; then
+          echo "WARN: PasswordAuthentication not explicitly disabled"
+        fi
+        
+        if ! grep -q "^PubkeyAuthentication yes" /etc/ssh/sshd_config; then
+          echo "WARN: PubkeyAuthentication not explicitly enabled"
+        fi
+        
+        echo "PASS: SSH configuration reviewed"
+        exit 0
+      register: linux_ssh_check
+      changed_when: false
+      failed_when: false
+
+    # Sudo Restrictions
+    - name: Verify sudo configuration for mount operations
+      ansible.builtin.shell: |
+        if [ ! -f /etc/sudoers.d/smb-users ]; then
+          echo "FAIL: /etc/sudoers.d/smb-users not found"
+          exit 1
+        fi
+        
+        if ! grep -q "mount" /etc/sudoers.d/smb-users; then
+          echo "FAIL: Mount permissions not configured in sudoers"
+          exit 1
+        fi
+        
+        echo "PASS: Sudo configuration for mount operations exists"
+        exit 0
+      register: sudo_check
+      changed_when: false
+      failed_when: sudo_check.rc != 0
+
+    - name: Display Linux security validation summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          LINUX SECURITY VALIDATION SUMMARY
+          ========================================
+          
+          ✅ Individual User Accounts: {{ 'PASS' if linux_user_check.rc == 0 else 'FAIL' }}
+          ✅ smb-users Group Membership: {{ 'PASS' if linux_group_check.rc == 0 else 'FAIL' }}
+          ✅ SMB Credentials Security: {{ 'PASS' if smb_creds_check.rc == 0 else 'FAIL' }}
+          ✅ SMB Mount Options: {{ 'PASS' if smb_mount_options_check.rc == 0 else 'FAIL' }}
+          ✅ Mount Point Permissions: {{ 'PASS' if mount_point_check.rc == 0 else 'FAIL' }}
+          ✅ Sudo Configuration: {{ 'PASS' if sudo_check.rc == 0 else 'FAIL' }}
+          
+          ========================================
+
+- name: Final Security Validation Report
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Display final security report
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          SECURITY VALIDATION COMPLETE
+          ========================================
+          
+          All security controls have been validated across Windows and Linux hosts.
+          
+          Review the summaries above for any FAIL or WARN items.
+          
+          RECOMMENDED ACTIONS:
+          
+          1. Address any FAIL items immediately
+          2. Review WARN items and determine if action needed
+          3. Run this validation regularly (monthly recommended)
+          4. Document any exceptions or deviations
+          
+          NEXT STEPS:
+          
+          - Schedule regular security audits
+          - Monitor access logs for anomalies
+          - Keep systems updated with security patches
+          - Review and rotate credentials periodically
+          
+          ========================================

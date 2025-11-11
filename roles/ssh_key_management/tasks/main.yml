@@ -1,0 +1,127 @@
+---
+# SSH Key Management Role
+# Requirements: 6.3, 6.4
+# Purpose: Runtime SSH key generation, deployment, and cleanup
+
+- name: Generate temporary SSH key pair for ansible_admin
+  delegate_to: localhost
+  ansible.builtin.command:
+    cmd: ssh-keygen -t ed25519 -f /tmp/ansible_admin_key -N "" -C "ansible_admin@tailnet-automation"
+    creates: /tmp/ansible_admin_key
+  register: ssh_keygen_result
+  changed_when: ssh_keygen_result.rc == 0
+
+- name: Set restrictive permissions on private key
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: /tmp/ansible_admin_key
+    mode: '0600'
+  when: ssh_keygen_result.changed
+
+- name: Read generated public key
+  delegate_to: localhost
+  ansible.builtin.slurp:
+    src: /tmp/ansible_admin_key.pub
+  register: ansible_admin_pubkey
+
+- name: Ensure .ssh directory exists for ansible_admin (Windows)
+  ansible.windows.win_file:
+    path: C:\Users\ansible_admin\.ssh
+    state: directory
+  when: ansible_os_family == "Windows"
+
+- name: Ensure .ssh directory exists for ansible_admin (Linux)
+  ansible.builtin.file:
+    path: /home/ansible_admin/.ssh
+    state: directory
+    owner: ansible_admin
+    group: ansible_admin
+    mode: '0700'
+  when: ansible_os_family != "Windows"
+
+- name: Deploy public key to Windows ansible_admin authorized_keys
+  ansible.windows.win_copy:
+    content: "{{ ansible_admin_pubkey.content | b64decode }}"
+    dest: C:\Users\ansible_admin\.ssh\authorized_keys
+  when: ansible_os_family == "Windows"
+
+- name: Set proper permissions on authorized_keys (Windows)
+  ansible.windows.win_shell: |
+    $authorizedKeysPath = "C:\Users\ansible_admin\.ssh\authorized_keys"
+    
+    # Remove inheritance
+    $acl = Get-Acl $authorizedKeysPath
+    $acl.SetAccessRuleProtection($true, $false)
+    
+    # Remove all existing rules
+    $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+    
+    # Add SYSTEM and ansible_admin with full control
+    $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "Allow")
+    $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("ansible_admin", "FullControl", "Allow")
+    
+    $acl.AddAccessRule($systemRule)
+    $acl.AddAccessRule($adminRule)
+    
+    Set-Acl $authorizedKeysPath $acl
+  when: ansible_os_family == "Windows"
+
+- name: Deploy public key to Linux ansible_admin authorized_keys
+  ansible.builtin.authorized_key:
+    user: ansible_admin
+    key: "{{ ansible_admin_pubkey.content | b64decode }}"
+    state: present
+  when: ansible_os_family != "Windows"
+
+- name: Verify SSH connectivity with new key (Windows)
+  delegate_to: localhost
+  ansible.builtin.command:
+    cmd: ssh -i /tmp/ansible_admin_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ansible_admin@{{ ansible_host }} "echo SSH key authentication successful"
+  register: ssh_verify
+  changed_when: false
+  failed_when: ssh_verify.rc != 0
+  when: ansible_os_family == "Windows"
+
+- name: Verify SSH connectivity with new key (Linux)
+  delegate_to: localhost
+  ansible.builtin.command:
+    cmd: ssh -i /tmp/ansible_admin_key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ansible_admin@{{ ansible_host }} "echo SSH key authentication successful"
+  register: ssh_verify_linux
+  changed_when: false
+  failed_when: ssh_verify_linux.rc != 0
+  when: ansible_os_family != "Windows"
+
+- name: Display SSH key deployment status
+  ansible.builtin.debug:
+    msg: |
+      ✅ SSH key successfully deployed and verified
+      
+      Public key deployed to: {{ 'C:\\Users\\ansible_admin\\.ssh\\authorized_keys' if ansible_os_family == 'Windows' else '/home/ansible_admin/.ssh/authorized_keys' }}
+      Private key location: /tmp/ansible_admin_key (TEMPORARY - will be cleaned up)
+      
+      SECURITY NOTE: The private key is stored temporarily and should be cleaned up after use.
+      Run the cleanup tasks to remove the temporary private key.
+
+- name: Cleanup temporary private key (automatic)
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/ansible_admin_key
+    - /tmp/ansible_admin_key.pub
+  when: ssh_key_auto_cleanup | default(true)
+  tags:
+    - cleanup
+
+- name: Display cleanup status
+  ansible.builtin.debug:
+    msg: |
+      {% if ssh_key_auto_cleanup | default(true) %}
+      🗑️  Temporary SSH keys automatically cleaned up from /tmp/
+      {% else %}
+      ⚠️  Temporary SSH keys retained at /tmp/ansible_admin_key
+      Manual cleanup required: rm /tmp/ansible_admin_key*
+      {% endif %}
+  tags:
+    - cleanup

@@ -1,0 +1,15 @@
+---
+# SSH Key Management Variables
+# Requirements: 6.3, 6.4
+
+# Automatic cleanup of temporary private keys (security best practice)
+ssh_key_auto_cleanup: true
+
+# SSH key configuration
+ssh_key_type: ed25519
+ssh_key_temp_path: /tmp/ansible_admin_key
+ssh_key_comment: "ansible_admin@tailnet-automation"
+
+# SSH connection verification settings
+ssh_verify_timeout: 10
+ssh_strict_host_checking: false
