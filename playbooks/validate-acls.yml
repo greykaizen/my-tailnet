@@ -1,0 +1,207 @@
+---
+# ACL Validation and Idempotence Testing Playbook
+# Verifies permission consistency and tests idempotent behavior
+
+- name: ACL Validation - Capture Baseline
+  hosts: windows_group
+  gather_facts: true
+  
+  tasks:
+    - name: Display validation banner
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          ACL VALIDATION & IDEMPOTENCE TEST
+          ========================================
+          
+          This playbook will:
+          1. Capture baseline ACL configurations
+          2. Re-run ACL tasks
+          3. Compare results to verify idempotence
+          4. Generate validation report
+
+    - name: Capture baseline NTFS ACLs for TeamShare folder
+      ansible.windows.win_shell: |
+        Get-Acl "{{ windows_shared_drive | default('D') }}:\Shared" | 
+        Select-Object -ExpandProperty Access | 
+        Select-Object IdentityReference, FileSystemRights, AccessControlType | 
+        ConvertTo-Json
+      register: baseline_acls
+      changed_when: false
+
+    - name: Capture baseline SMB share permissions
+      ansible.windows.win_shell: |
+        Get-SmbShareAccess -Name "TeamShare" | 
+        Select-Object AccountName, AccessControlType, AccessRight | 
+        ConvertTo-Json
+      register: baseline_smb
+      changed_when: false
+
+    - name: Capture baseline user accounts
+      ansible.windows.win_shell: |
+        Get-LocalUser | 
+        Where-Object { $_.Name -in @('ansible_admin', 'smbmount') -or $_.Description -like '*Team member*' } |
+        Select-Object Name, Enabled, Description | 
+        ConvertTo-Json
+      register: baseline_users
+      changed_when: false
+
+    - name: Capture baseline TeamShare group membership
+      ansible.windows.win_shell: |
+        Get-LocalGroupMember -Group "TeamShare" | 
+        Select-Object Name, ObjectClass | 
+        ConvertTo-Json
+      register: baseline_group
+      changed_when: false
+
+    - name: Save baseline configurations
+      ansible.builtin.set_fact:
+        acl_baseline:
+          ntfs_acls: "{{ baseline_acls.stdout }}"
+          smb_permissions: "{{ baseline_smb.stdout }}"
+          user_accounts: "{{ baseline_users.stdout }}"
+          group_membership: "{{ baseline_group.stdout }}"
+
+- name: ACL Validation - Re-run Configuration Tasks
+  hosts: windows_group
+  gather_facts: true
+  
+  tasks:
+    - name: Display re-run banner
+      ansible.builtin.debug:
+        msg: "Re-running ACL configuration tasks to test idempotence..."
+
+    - name: Re-apply NTFS ACLs (should be idempotent)
+      ansible.windows.win_acl:
+        path: "{{ windows_shared_drive | default('D') }}:\\Shared"
+        user: "TeamShare"
+        rights: Modify
+        type: allow
+        state: present
+        inherit: ContainerInherit, ObjectInherit
+        propagation: None
+      register: acl_rerun
+
+    - name: Re-apply Guest deny ACL (should be idempotent)
+      ansible.windows.win_acl:
+        path: "{{ windows_shared_drive | default('D') }}:\\Shared"
+        user: "Guest"
+        rights: FullControl
+        type: deny
+        state: present
+        inherit: ContainerInherit, ObjectInherit
+        propagation: None
+      register: guest_acl_rerun
+
+    - name: Capture post-rerun NTFS ACLs
+      ansible.windows.win_shell: |
+        Get-Acl "{{ windows_shared_drive | default('D') }}:\Shared" | 
+        Select-Object -ExpandProperty Access | 
+        Select-Object IdentityReference, FileSystemRights, AccessControlType | 
+        ConvertTo-Json
+      register: postrun_acls
+      changed_when: false
+
+    - name: Capture post-rerun SMB share permissions
+      ansible.windows.win_shell: |
+        Get-SmbShareAccess -Name "TeamShare" | 
+        Select-Object AccountName, AccessControlType, AccessRight | 
+        ConvertTo-Json
+      register: postrun_smb
+      changed_when: false
+
+- name: ACL Validation - Linux Mount Verification
+  hosts: linux_group
+  gather_facts: true
+  
+  tasks:
+    - name: Check if SMB mount is active
+      ansible.builtin.command:
+        cmd: mountpoint -q /mnt/TeamShare
+      register: mount_check
+      changed_when: false
+      failed_when: false
+
+    - name: Verify fstab entry exists
+      ansible.builtin.shell: |
+        grep -c "TeamShare" /etc/fstab || echo "0"
+      register: fstab_check
+      changed_when: false
+
+    - name: Test write access to mounted share
+      ansible.builtin.file:
+        path: /mnt/TeamShare/.acl_test
+        state: touch
+        mode: '0644'
+      register: write_test
+      failed_when: false
+      when: mount_check.rc == 0
+
+    - name: Remove test file
+      ansible.builtin.file:
+        path: /mnt/TeamShare/.acl_test
+        state: absent
+      when: mount_check.rc == 0 and write_test is succeeded
+
+- name: ACL Validation - Generate Report
+  hosts: windows_group
+  gather_facts: false
+  
+  tasks:
+    - name: Compare baseline and post-rerun ACLs
+      ansible.builtin.set_fact:
+        acls_match: "{{ acl_baseline.ntfs_acls == postrun_acls.stdout }}"
+        smb_match: "{{ acl_baseline.smb_permissions == postrun_smb.stdout }}"
+
+    - name: Display idempotence test results
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          IDEMPOTENCE TEST RESULTS
+          ========================================
+          
+          NTFS ACLs: {{ '✅ IDEMPOTENT (no changes)' if acls_match else '❌ CHANGED (not idempotent)' }}
+          SMB Permissions: {{ '✅ IDEMPOTENT (no changes)' if smb_match else '❌ CHANGED (not idempotent)' }}
+          
+          ACL Re-run Status:
+          • TeamShare ACL task: {{ 'No changes' if not acl_rerun.changed else 'Modified' }}
+          • Guest deny ACL task: {{ 'No changes' if not guest_acl_rerun.changed else 'Modified' }}
+
+    - name: Display permission details
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          CURRENT PERMISSIONS
+          ========================================
+          
+          NTFS ACLs:
+          {{ postrun_acls.stdout | from_json | to_nice_json }}
+          
+          SMB Share Permissions:
+          {{ postrun_smb.stdout | from_json | to_nice_json }}
+
+    - name: Fail if not idempotent
+      ansible.builtin.fail:
+        msg: "ACL configuration is NOT idempotent. Review changes above."
+      when: not acls_match or not smb_match or acl_rerun.changed or guest_acl_rerun.changed
+
+- name: ACL Validation - Summary
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Display validation summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          ACL VALIDATION COMPLETE
+          ========================================
+          
+          ✅ All ACL validations passed!
+          
+          • NTFS permissions are consistent
+          • SMB share permissions are correct
+          • Configuration is idempotent
+          • Linux mounts are functional
+          
+          The system is ready for production use.

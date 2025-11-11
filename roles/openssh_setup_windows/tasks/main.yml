@@ -2,16 +2,28 @@
 # OpenSSH Setup for Windows Role
 # Requirements: 2.5, 6.3
 
-- name: Ensure Chocolatey is installed
-  ansible.windows.win_chocolatey:
-    name: chocolatey
-    state: present
+- name: Check if Chocolatey is installed
+  ansible.windows.win_shell: |
+    if (Get-Command choco -ErrorAction SilentlyContinue) {
+      Write-Output "installed"
+    } else {
+      Write-Output "not_installed"
+    }
+  register: choco_check
+  changed_when: false
+
+- name: Install Chocolatey
+  ansible.windows.win_shell: |
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+  when: choco_check.stdout | trim == 'not_installed'
 
 - name: Install OpenSSH via Chocolatey
-  ansible.windows.win_chocolatey:
-    name: openssh
-    state: present
-    version: latest
+  ansible.windows.win_shell: |
+    choco install openssh -y
+  register: openssh_install
+  changed_when: "'already installed' not in openssh_install.stdout"
 
 - name: Ensure OpenSSH service is installed
   ansible.windows.win_service:
@@ -25,31 +37,26 @@
     state: directory
 
 - name: Configure sshd_config with security settings
-  ansible.windows.win_lineinfile:
-    path: C:\ProgramData\ssh\sshd_config
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    state: present
-  loop:
-    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
-    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
-    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
-    - { regexp: '^#?AllowUsers', line: 'AllowUsers ansible_admin @TeamShare @Administrators' }
-    - { regexp: '^#?Protocol', line: 'Protocol 2' }
-    - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
-    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
-    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
-    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
-    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
-  notify: Restart sshd service
-
-- name: Enable SFTP subsystem
-  ansible.windows.win_lineinfile:
-    path: C:\ProgramData\ssh\sshd_config
-    regexp: '^#?Subsystem\s+sftp'
-    line: 'Subsystem sftp sftp-server.exe'
-    state: present
-  notify: Restart sshd service
+  ansible.windows.win_shell: |
+    $configPath = "C:\ProgramData\ssh\sshd_config"
+    $config = Get-Content $configPath -Raw
+    
+    # Security settings
+    $config = $config -replace '(?m)^#?PasswordAuthentication.*$', 'PasswordAuthentication no'
+    $config = $config -replace '(?m)^#?PubkeyAuthentication.*$', 'PubkeyAuthentication yes'
+    $config = $config -replace '(?m)^#?PermitRootLogin.*$', 'PermitRootLogin no'
+    $config = $config -replace '(?m)^#?AllowUsers.*$', 'AllowUsers ansible_admin @TeamShare @Administrators'
+    $config = $config -replace '(?m)^#?Protocol.*$', 'Protocol 2'
+    $config = $config -replace '(?m)^#?PermitEmptyPasswords.*$', 'PermitEmptyPasswords no'
+    $config = $config -replace '(?m)^#?X11Forwarding.*$', 'X11Forwarding no'
+    $config = $config -replace '(?m)^#?MaxAuthTries.*$', 'MaxAuthTries 3'
+    $config = $config -replace '(?m)^#?ClientAliveInterval.*$', 'ClientAliveInterval 300'
+    $config = $config -replace '(?m)^#?ClientAliveCountMax.*$', 'ClientAliveCountMax 2'
+    $config = $config -replace '(?m)^#?Subsystem\s+sftp.*$', 'Subsystem sftp sftp-server.exe'
+    
+    Set-Content $configPath -Value $config
+  register: sshd_config
+  changed_when: true
 
 - name: Configure Windows Firewall rule for SSH (port 22)
   community.windows.win_firewall_rule:
