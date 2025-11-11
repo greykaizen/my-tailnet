@@ -1,0 +1,11 @@
+---
+# Setup SFTP Fallback System
+# This playbook deploys SFTP helper scripts for individual user access
+
+- name: Configure SFTP fallback on Linux
+  hosts: linux_group
+  gather_facts: true
+  
+  roles:
+    - role: sftp_mount_fallback
+      tags: ['sftp', 'linux', 'file-sharing', 'fallback']

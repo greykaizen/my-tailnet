@@ -1,0 +1,92 @@
+---
+# Samba Share Role - Windows SMB Share Configuration
+
+- name: Create shared folder base directory
+  ansible.windows.win_file:
+    path: "{{ shared_base_path }}"
+    state: directory
+
+- name: Create shared folder structure (Projects, Data, Archive)
+  ansible.windows.win_file:
+    path: "{{ item }}"
+    state: directory
+  loop: "{{ shared_folders }}"
+
+- name: Set NTFS ACL - Grant TeamShare group Modify permissions
+  ansible.windows.win_acl:
+    path: "{{ shared_base_path }}"
+    user: "{{ teamshare_group }}"
+    rights: Modify
+    type: allow
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: Set NTFS ACL - Deny Guest account Full Control
+  ansible.windows.win_acl:
+    path: "{{ shared_base_path }}"
+    user: "{{ guest_account }}"
+    rights: FullControl
+    type: deny
+    state: present
+    inherit: ContainerInherit, ObjectInherit
+    propagation: None
+
+- name: Create SMB share with proper security settings
+  ansible.windows.win_share:
+    name: "{{ share_name }}"
+    path: "{{ shared_base_path }}"
+    state: present
+    full: "{{ teamshare_group }}"
+    description: "Team shared folder with hybrid SMB/SFTP access"
+
+- name: Remove Guest from SMB share permissions
+  ansible.windows.win_shell: |
+    Revoke-SmbShareAccess -Name "{{ share_name }}" -AccountName "{{ guest_account }}" -Force
+  ignore_errors: true
+
+- name: Disable SMB 1.0 protocol (security hardening)
+  ansible.windows.win_shell: |
+    Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+  register: smb1_result
+  changed_when: smb1_result.rc == 0
+
+- name: Disable SMB 2.0 protocol (security hardening)
+  ansible.windows.win_shell: |
+    Set-SmbServerConfiguration -EnableSMB2Protocol $false -Force
+  register: smb2_result
+  changed_when: smb2_result.rc == 0
+
+- name: Enable SMB encryption (security hardening)
+  ansible.windows.win_shell: |
+    Set-SmbServerConfiguration -EncryptData $true -Force
+  register: smb_encrypt_result
+  changed_when: smb_encrypt_result.rc == 0
+
+- name: Reject unencrypted SMB access (security hardening)
+  ansible.windows.win_shell: |
+    Set-SmbServerConfiguration -RejectUnencryptedAccess $true -Force
+  register: smb_reject_result
+  changed_when: smb_reject_result.rc == 0
+
+- name: Configure firewall rule to restrict SMB to Tailscale network
+  community.windows.win_firewall_rule:
+    name: "SMB - Tailscale Network Only"
+    localport: 445
+    action: allow
+    direction: in
+    protocol: tcp
+    state: present
+    enabled: true
+    remoteip: "{{ tailscale_network }}"
+    description: "Allow SMB access only from Tailscale network"
+
+- name: Verify SMB share is accessible
+  ansible.windows.win_shell: |
+    Get-SmbShare -Name "{{ share_name }}" | Select-Object Name, Path, Description
+  register: share_verification
+  changed_when: false
+
+- name: Display share configuration
+  ansible.builtin.debug:
+    msg: "SMB share '{{ share_name }}' created at {{ shared_base_path }} with security hardening enabled"

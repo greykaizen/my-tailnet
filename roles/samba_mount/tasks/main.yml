@@ -1,0 +1,91 @@
+---
+# Samba Mount Role - Linux SMB Mount Configuration
+
+- name: Install cifs-utils package for SMB mounting
+  ansible.builtin.package:
+    name: cifs-utils
+    state: present
+  become: true
+
+- name: Create mount point directory
+  ansible.builtin.file:
+    path: "{{ smb_mount_point }}"
+    state: directory
+    mode: '0755'
+  become: true
+
+- name: Create secure credentials file for smbmount account
+  ansible.builtin.copy:
+    content: |
+      username={{ vault_smbmount_username }}
+      password={{ vault_smbmount_password }}
+    dest: "{{ smb_credentials_file }}"
+    mode: '0600'
+    owner: root
+    group: root
+  become: true
+  no_log: true
+
+- name: Check if mount entry already exists in fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^//{{ smb_server }}/{{ smb_share_name }}\\s+"
+    state: absent
+  check_mode: true
+  register: fstab_check
+  become: true
+
+- name: Configure production-grade fstab entry with _netdev flag
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    line: "//{{ smb_server }}/{{ smb_share_name }} {{ smb_mount_point }} cifs {{ smb_mount_options }} 0 0"
+    state: present
+    backup: true
+  become: true
+  register: fstab_updated
+
+- name: Reload systemd daemon to recognize new mount
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: fstab_updated.changed
+
+- name: Mount the SMB share
+  ansible.builtin.command:
+    cmd: mount {{ smb_mount_point }}
+  become: true
+  register: mount_result
+  changed_when: mount_result.rc == 0
+  failed_when: false
+
+- name: Verify mount is successful
+  ansible.builtin.command:
+    cmd: mountpoint -q {{ smb_mount_point }}
+  register: mountpoint_check
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Set proper mount point permissions for team access
+  ansible.builtin.file:
+    path: "{{ smb_mount_point }}"
+    state: directory
+    mode: '0755'
+  become: true
+  when: mountpoint_check.rc == 0
+
+- name: Display mount status
+  ansible.builtin.debug:
+    msg: >
+      SMB mount configured at {{ smb_mount_point }}.
+      Mount status: {{ 'Active' if mountpoint_check.rc == 0 else 'Will mount on next access (automount)' }}
+
+- name: Provide troubleshooting information
+  ansible.builtin.debug:
+    msg: |
+      If mount fails, verify:
+      1. Tailscale is running: systemctl status tailscaled
+      2. Windows host is reachable: ping {{ smb_server }}
+      3. SMB credentials are correct in {{ smb_credentials_file }}
+      4. Manual mount test: mount {{ smb_mount_point }}
+  when: mountpoint_check.rc != 0

@@ -1,0 +1,26 @@
+---
+# Samba Share Role Variables
+
+# Shared folder configuration
+shared_drive: "{{ windows_shared_drive | default('D') }}"
+shared_base_path: "{{ shared_drive }}:\\Shared"
+share_name: "TeamShare"
+
+# Folder structure
+shared_folders:
+  - "{{ shared_base_path }}\\Projects"
+  - "{{ shared_base_path }}\\Data"
+  - "{{ shared_base_path }}\\Archive"
+
+# Security groups
+teamshare_group: "TeamShare"
+guest_account: "Guest"
+
+# SMB security settings
+smb_encryption_enabled: true
+smb_v1_disabled: true
+smb_v2_disabled: true
+smb_reject_unencrypted: true
+
+# Tailscale network range for firewall rules
+tailscale_network: "100.0.0.0/8"

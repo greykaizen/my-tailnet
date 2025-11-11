@@ -1,0 +1,17 @@
+---
+# Samba Mount Role Variables
+
+# SMB mount configuration
+smb_server: "{{ windows_hostname | default('lab-windows') }}"
+smb_share_name: "TeamShare"
+smb_mount_point: "/mnt/TeamShare"
+smb_credentials_file: "/etc/smbcredentials"
+
+# SMB mount options (production-grade)
+smb_version: "3.0"
+smb_file_mode: "0755"
+smb_dir_mode: "0755"
+smb_gid: "1100"  # smb-users group
+
+# Mount options for production reliability
+smb_mount_options: "credentials={{ smb_credentials_file }},vers={{ smb_version }},uid=0,gid={{ smb_gid }},file_mode={{ smb_file_mode }},dir_mode={{ smb_dir_mode }},_netdev,nounix,x-systemd.automount,x-systemd.after=tailscaled.service,x-systemd.after=network-online.target"

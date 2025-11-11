@@ -1,0 +1,12 @@
+---
+# SFTP Mount Fallback Role Variables
+
+# SFTP configuration
+sftp_server: "{{ windows_hostname | default('lab-windows') }}"
+sftp_remote_path: "/TeamShare"
+sftp_helper_script: "/usr/local/bin/mount-sftp-share.sh"
+sftp_unmount_script: "/usr/local/bin/umount-sftp-share.sh"
+
+# SSH configuration
+ssh_key_type: "ed25519"
+ssh_key_bits: 256
