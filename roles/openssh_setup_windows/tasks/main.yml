@@ -2,28 +2,17 @@
 # OpenSSH Setup for Windows Role
 # Requirements: 2.5, 6.3
 
-- name: Check if Chocolatey is installed
-  ansible.windows.win_shell: |
-    if (Get-Command choco -ErrorAction SilentlyContinue) {
-      Write-Output "installed"
-    } else {
-      Write-Output "not_installed"
-    }
-  register: choco_check
-  changed_when: false
-
-- name: Install Chocolatey
-  ansible.windows.win_shell: |
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-  when: choco_check.stdout | trim == 'not_installed'
-
-- name: Install OpenSSH via Chocolatey
-  ansible.windows.win_shell: |
-    choco install openssh -y
+- name: Install OpenSSH Server using Windows Optional Feature
+  ansible.windows.win_optional_feature:
+    name: OpenSSH.Server~~~~0.0.1.0
+    state: present
   register: openssh_install
-  changed_when: "'already installed' not in openssh_install.stdout"
+
+- name: Install OpenSSH Client using Windows Optional Feature
+  ansible.windows.win_optional_feature:
+    name: OpenSSH.Client~~~~0.0.1.0
+    state: present
+  register: openssh_client_install
 
 - name: Ensure OpenSSH service is installed
   ansible.windows.win_service:

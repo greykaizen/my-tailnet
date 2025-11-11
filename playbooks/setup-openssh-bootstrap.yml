@@ -22,13 +22,11 @@
           
           1. Open PowerShell as Administrator
           
-          2. Install Chocolatey (if not already installed):
-             Set-ExecutionPolicy Bypass -Scope Process -Force
-             [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-             iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          2. Install OpenSSH Server using Windows Optional Feature:
+             Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
           
-          3. Install OpenSSH via Chocolatey:
-             choco install openssh -y
+          3. Install OpenSSH Client (optional but recommended):
+             Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
           
           4. Start and enable SSH service:
              Start-Service sshd
@@ -39,6 +37,9 @@
           
           6. Verify SSH is running:
              Get-Service sshd
+          
+          NOTE: OpenSSH is a built-in Windows feature since Windows 10 1809 and Windows Server 2019.
+          No third-party package managers (Chocolatey, winget) are required!
           
           ========================================
           AFTER BOOTSTRAP COMPLETION
