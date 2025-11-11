@@ -1,0 +1,19 @@
+---
+# Boot Notifications Setup
+# This playbook configures boot notification systems on both Windows and Linux
+
+- name: Configure boot notifications on Linux
+  hosts: linux_group
+  gather_facts: true
+  
+  roles:
+    - role: boot_notify_linux
+      tags: ['boot-notify', 'linux', 'monitoring']
+
+- name: Configure boot notifications on Windows
+  hosts: windows_group
+  gather_facts: true
+  
+  roles:
+    - role: boot_notify_windows
+      tags: ['boot-notify', 'windows', 'monitoring']

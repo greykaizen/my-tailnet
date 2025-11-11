@@ -1,0 +1,82 @@
+---
+# Boot Notify Linux Role - Systemd Boot Notification Service
+
+- name: Install curl for Telegram API calls
+  ansible.builtin.package:
+    name: curl
+    state: present
+  become: true
+
+- name: Deploy boot notification script
+  ansible.builtin.copy:
+    src: boot-notify.sh
+    dest: "{{ script_path }}"
+    mode: '0755'
+    owner: root
+    group: root
+  become: true
+
+- name: Configure Telegram credentials in script
+  ansible.builtin.lineinfile:
+    path: "{{ script_path }}"
+    regexp: '^TELEGRAM_BOT_TOKEN='
+    line: 'TELEGRAM_BOT_TOKEN="{{ telegram_bot_token }}"'
+    state: present
+  become: true
+  no_log: true
+
+- name: Configure Telegram chat ID in script
+  ansible.builtin.lineinfile:
+    path: "{{ script_path }}"
+    regexp: '^TELEGRAM_CHAT_ID='
+    line: 'TELEGRAM_CHAT_ID="{{ telegram_chat_id }}"'
+    state: present
+  become: true
+  no_log: true
+
+- name: Create systemd service file for boot notifications
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description={{ service_description }}
+      After=network-online.target tailscaled.service
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart={{ script_path }}
+      User=root
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: "/etc/systemd/system/{{ service_name }}.service"
+    mode: '0644'
+    owner: root
+    group: root
+  become: true
+  register: systemd_service
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+  become: true
+  when: systemd_service.changed
+
+- name: Enable boot notification service
+  ansible.builtin.systemd:
+    name: "{{ service_name }}.service"
+    enabled: true
+    state: stopped
+  become: true
+
+- name: Display boot notification setup status
+  ansible.builtin.debug:
+    msg: |
+      Boot notification service configured successfully.
+      Service: {{ service_name }}.service
+      Script: {{ script_path }}
+      Status: Enabled (will run on next boot)
+      
+      To test manually: sudo {{ script_path }}
