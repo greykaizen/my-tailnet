@@ -1,0 +1,62 @@
+---
+# SSH Key Management Playbook
+# Requirements: 6.3, 6.4
+# Purpose: Generate, deploy, and manage SSH keys for ansible_admin account
+
+- name: SSH Key Management for Windows Hosts
+  hosts: windows_group
+  gather_facts: true
+  vars:
+    ansible_os_family: "Windows"
+  
+  tasks:
+    - name: Include SSH key management role
+      ansible.builtin.include_role:
+        name: ssh_key_management
+
+- name: SSH Key Management for Linux Hosts
+  hosts: linux_group
+  gather_facts: true
+  
+  tasks:
+    - name: Include SSH key management role
+      ansible.builtin.include_role:
+        name: ssh_key_management
+
+- name: Post-Deployment Security Summary
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Display security summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          SSH KEY DEPLOYMENT COMPLETE
+          ========================================
+          
+          ✅ SSH keys generated and deployed successfully
+          ✅ Public keys deployed to ansible_admin accounts
+          ✅ SSH connectivity verified on all hosts
+          ✅ Temporary private keys cleaned up (security best practice)
+          
+          NEXT STEPS:
+          
+          1. Update inventory to use SSH key authentication:
+             - Set ansible_ssh_private_key_file in group_vars
+             - Remove ansible_password from configuration
+          
+          2. Test SSH connectivity:
+             ansible all -i inventory/hosts.ini -m ping
+          
+          3. Transition to SSH-based management:
+             - Update group_vars to use ansible_connection: ssh
+             - Remove WinRM configuration
+          
+          SECURITY NOTES:
+          
+          - Private keys are NOT stored in vault (ephemeral generation)
+          - SSH key authentication enforced (no password fallback)
+          - Keys can be regenerated at any time by re-running this playbook
+          
+          ========================================

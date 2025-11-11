@@ -1,0 +1,211 @@
+---
+# Dual-Mode Provisioning Transition Playbook
+# Requirements: 2.5, 6.3
+# Purpose: Transition from WinRM-based provisioning to SSH-based ongoing management
+
+- name: Pre-Transition Validation
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Display transition overview
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          DUAL-MODE PROVISIONING TRANSITION
+          ========================================
+          
+          This playbook transitions Windows management from WinRM to SSH.
+          
+          PREREQUISITES:
+          1. ✅ Initial provisioning completed via WinRM
+          2. ✅ OpenSSH installed and configured on Windows
+          3. ✅ ansible_admin account created
+          4. ✅ SSH keys generated and deployed
+          
+          TRANSITION STEPS:
+          1. Verify current WinRM connectivity
+          2. Test SSH connectivity with ansible_admin
+          3. Backup current configuration
+          4. Switch to SSH-based configuration
+          5. Validate new SSH connectivity
+          
+          ========================================
+
+    - name: Check if SSH key exists
+      ansible.builtin.stat:
+        path: ~/.ssh/ansible_admin_key
+      register: ssh_key_check
+      delegate_to: localhost
+
+    - name: Fail if SSH key not found
+      ansible.builtin.fail:
+        msg: |
+          ❌ SSH key not found at ~/.ssh/ansible_admin_key
+          
+          Please run the SSH key setup first:
+          ansible-playbook playbooks/setup-ssh-keys.yml -i inventory/hosts.ini --ask-vault-pass
+      when: not ssh_key_check.stat.exists
+
+- name: Verify WinRM Connectivity (Current Mode)
+  hosts: windows_group
+  gather_facts: false
+  
+  tasks:
+    - name: Test WinRM connection
+      ansible.windows.win_ping:
+      register: winrm_test
+      ignore_errors: true
+
+    - name: Display WinRM status
+      ansible.builtin.debug:
+        msg: |
+          {% if winrm_test.failed %}
+          ⚠️  WinRM connectivity issue detected
+          This may indicate you're already using SSH mode.
+          {% else %}
+          ✅ WinRM connectivity confirmed
+          Current mode: {{ provisioning_mode | default('winrm') }}
+          {% endif %}
+
+- name: Test SSH Connectivity (Target Mode)
+  hosts: windows_group
+  gather_facts: false
+  
+  tasks:
+    - name: Test SSH connection with ansible_admin
+      delegate_to: localhost
+      ansible.builtin.command:
+        cmd: ssh -i ~/.ssh/ansible_admin_key -o StrictHostKeyChecking=no -o ConnectTimeout=10 ansible_admin@{{ ansible_host }} "echo SSH Ready"
+      register: ssh_test
+      changed_when: false
+      failed_when: false
+
+    - name: Display SSH status
+      ansible.builtin.debug:
+        msg: |
+          {% if ssh_test.rc == 0 %}
+          ✅ SSH connectivity confirmed
+          Ready to transition to SSH mode
+          {% else %}
+          ❌ SSH connectivity failed
+          
+          Error: {{ ssh_test.stderr | default('Connection timeout or refused') }}
+          
+          Please ensure:
+          1. OpenSSH is installed and running on Windows
+          2. SSH keys are deployed to ansible_admin account
+          3. Firewall allows SSH connections (port 22)
+          4. Tailscale is connected
+          {% endif %}
+
+    - name: Fail if SSH not ready
+      ansible.builtin.fail:
+        msg: "SSH connectivity not ready. Please resolve issues above before transitioning."
+      when: ssh_test.rc != 0
+
+- name: Backup Current Configuration
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Create backup of current windows_group.yml
+      ansible.builtin.copy:
+        src: inventory/group_vars/windows_group.yml
+        dest: inventory/group_vars/windows_group.yml.backup.{{ ansible_date_time.iso8601_basic_short }}
+        backup: yes
+      register: backup_result
+
+    - name: Display backup status
+      ansible.builtin.debug:
+        msg: |
+          ✅ Configuration backed up
+          Backup location: {{ backup_result.dest }}
+
+- name: Transition to SSH Mode
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Copy SSH configuration to active windows_group.yml
+      ansible.builtin.copy:
+        src: inventory/group_vars/windows_group_ssh.yml
+        dest: inventory/group_vars/windows_group.yml
+        backup: yes
+      register: transition_result
+
+    - name: Display transition status
+      ansible.builtin.debug:
+        msg: |
+          ✅ Configuration transitioned to SSH mode
+          
+          Changes applied:
+          - Connection method: WinRM → SSH
+          - User account: Administrator → ansible_admin
+          - Authentication: Password → SSH key
+          - Port: 5985 → 22
+
+- name: Validate SSH Mode Connectivity
+  hosts: windows_group
+  gather_facts: true
+  
+  tasks:
+    - name: Test Ansible connectivity in SSH mode
+      ansible.builtin.ping:
+      register: ssh_ansible_test
+
+    - name: Gather Windows facts via SSH
+      ansible.builtin.setup:
+      register: facts_test
+
+    - name: Display validation results
+      ansible.builtin.debug:
+        msg: |
+          ✅ SSH mode validation successful
+          
+          Connection details:
+          - Host: {{ ansible_host }}
+          - User: {{ ansible_user }}
+          - Connection: {{ ansible_connection }}
+          - OS: {{ ansible_os_family }}
+          - Hostname: {{ ansible_hostname }}
+          
+          Transition complete! All future playbooks will use SSH.
+
+- name: Post-Transition Summary
+  hosts: localhost
+  gather_facts: false
+  
+  tasks:
+    - name: Display final summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          TRANSITION COMPLETE
+          ========================================
+          
+          ✅ Successfully transitioned to SSH-based management
+          
+          WHAT CHANGED:
+          - inventory/group_vars/windows_group.yml now uses SSH configuration
+          - All future playbook runs will use SSH (not WinRM)
+          - Authentication via SSH key (no passwords)
+          
+          NEXT STEPS:
+          
+          1. Test standard operations:
+             ansible-playbook playbooks/preflight-checks.yml -i inventory/hosts.ini
+          
+          2. Verify all roles work in SSH mode:
+             ansible-playbook playbooks/setup-all.yml -i inventory/hosts.ini --ask-vault-pass
+          
+          3. SECURITY: Rotate Administrator password
+             - Generate new 32-character password
+             - Store in secure password manager (1Password, LastPass, etc.)
+             - Remove from vault.yml permanently
+          
+          ROLLBACK (if needed):
+          If you need to revert to WinRM mode:
+          cp inventory/group_vars/windows_group_winrm.yml inventory/group_vars/windows_group.yml
+          
+          ========================================

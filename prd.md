@@ -67,6 +67,9 @@ my-tailscale/
 │   ├── sftp_mount_fallback/
 │   │   ├── tasks/main.yml
 │   │   └── vars/main.yml
+│   ├── ssh_key_management/
+│   │   ├── tasks/main.yml
+│   │   └── vars/main.yml
 │   ├── boot_notify_linux/
 │   │   ├── tasks/main.yml
 │   │   ├── files/boot_notify.sh
@@ -76,7 +79,7 @@ my-tailscale/
 │       ├── files/boot_notify.ps1
 │       └── vars/main.yml
 ├── playbooks/
-│   ├── setup-openssh-bootstrap.yml    # PREREQUISITE - Install OpenSSH on Windows (manual trigger)
+│   ├── setup-openssh-bootstrap.yml    # PREREQUISITE - Verify OpenSSH bootstrap completion
 │   ├── preflight-checks.yml           # Validate Tailscale, vault, connectivity before main run
 │   ├── setup-all.yml                  # Master orchestration (after OpenSSH bootstrap)
 │   ├── setup-windows-users.yml
@@ -85,7 +88,10 @@ my-tailscale/
 │   ├── setup-smb-share.yml
 │   ├── mount-smb-linux.yml
 │   ├── setup-sftp-fallback.yml        # Optional: configure SFTP as fallback
+│   ├── setup-ssh-keys.yml             # SSH key generation, deployment, and cleanup
+│   ├── transition-to-ssh.yml          # Transition from WinRM to SSH management
 │   ├── validate-acls.yml              # ACL idempotence validation test
+│   ├── security-validation.yml        # Comprehensive security audit
 │   └── boot-notifications.yml
 └── vars/
     └── vault.yml              # Encrypted: passwords, tokens, chat IDs
@@ -128,9 +134,9 @@ smbmount_password: "{{ vault_smbmount_password }}"
 # Tailscale auth key (generate from https://login.tailscale.com/admin/settings/keys)
 tailscale_authkey: "{{ vault_tailscale_key }}"
 
-# Telegram notifications
-telegram_bot_token: "{{ vault_telegram_token }}"
-telegram_chat_id: "{{ vault_telegram_chat_id }}"
+# Telegram bot credentials (for boot notifications)
+vault_telegram_bot_token: "your_bot_token_here"
+vault_telegram_chat_id: "your_chat_id_here"
 ```
 
 **User creation is vault-protected** — Playbooks reference `team_users` list from vault.yml:
@@ -315,20 +321,33 @@ sshfs_remote_path: "shared@lab-windows:/{{ windows_shared_drive|lower }}/Shared"
 
 **Install and configure OpenSSH on Windows for Ansible management + SFTP fallback:**
 
-- Install OpenSSH using `ansible.windows.win_chocolatey` module (`openssh` package)
+- Install OpenSSH with intelligent method selection:
+  - **Primary method**: Install via winget (Microsoft.OpenSSH.Beta) for latest version
+    - Checks if winget is available using `Get-Command winget`
+    - Uses silent installation with automatic agreement acceptance
+    - Handles "already installed" scenarios gracefully
+  - **Fallback method**: Use `ansible.windows.win_optional_feature` if winget unavailable
+    - Feature: `OpenSSH.Server~~~~0.0.1.0` (server component)
+    - Available on Windows 10 (1809+) and Windows Server 2019+
+  - Displays installation method used for transparency
 - Configure sshd service:
     - Set StartMode to `Auto`
     - Ensure service is running
 - Create/update `C:\ProgramData\ssh\sshd_config` with:
 - Port 22
-- `PasswordAuthentication yes`
-- `PubkeyAuthentication yes` (for future key-based auth)
+- `PasswordAuthentication no` (SSH keys only for security)
+- `PubkeyAuthentication yes` (key-based authentication)
 - `Subsystem sftp sftp-server.exe`
 - `AllowUsers ansible_admin @TeamShare @Administrators` (Ansible admin + team members for SFTP + admins)
 - `PermitEmptyPasswords no`
+- `Protocol 2` (SSH protocol version 2 only)
+- `MaxAuthTries 3` (limit authentication attempts)
+- `ClientAliveInterval 300` and `ClientAliveCountMax 2` (connection keepalive)
 - Configure Windows firewall to allow port 22:
-- Use `ansible.windows.win_firewall_rule` to create inbound rule
-- Rule: allow TCP port 22 from all sources (Tailscale will restrict via network)
+- Use `community.windows.win_firewall_rule` to create inbound rule
+- Rule: allow TCP port 22 from Tailscale network only (100.64.0.0/10)
+- Restrict to domain, private, and public profiles
+- Configure service failure recovery (automatic restart on failure)
 - Verify SSH service is running and accessible via Tailscale IP
 - Test: `ssh -l ansible_admin lab-windows` (Ansible management)
 - Test: `ssh -l alice lab-windows` (Team member SFTP fallback)
@@ -419,36 +438,131 @@ sshfs_remote_path: "shared@lab-windows:/{{ windows_shared_drive|lower }}/Shared"
 
 ### Role: `boot_notify_linux`
 
-- Create systemd service `telegram-boot-notify.service`
-- Deploy bash script that:
-- Detects OS type (Linux)
-- Gets logged-in user
-- Queries Tailscale status via `tailscale status` (parse for IP address and online/offline)
-- Gets hostname via `hostname`
-- Gets local IP via `hostname -I`
-- Gets CPU count via `nproc`
-- Gets total RAM via `free -h`
-- Gets last reboot time via `uptime` or `who -b`
-- Constructs formatted Telegram message with all details
-- Sends via `curl` POST to Telegram Bot API
-- Enable service to run on boot
-- Message format example: "🐧 Linux Boot | User: alice | Hostname: lab-pc-linux | Local IP: 192.168.1.50 | Tailscale IP: 100.x.x.x (online) | CPU: 8 cores | RAM: 16GB | Last boot: 2025-10-31 09:15:22"
+**Configure systemd service for boot notifications via Telegram:**
+
+- Install `curl` package for Telegram API calls
+- Deploy bash script to `/usr/local/bin/boot-notify.sh` with mode 0755
+- Script gathers system information:
+  - Hostname via `hostname`
+  - OS version from `/etc/os-release`
+  - System uptime via `uptime -p`
+  - Local IP addresses via `ip -4 addr show`
+  - Tailscale IP and status via `tailscale ip -4` and `tailscale status --json`
+  - CPU count via `nproc`
+  - RAM via `free -g`
+  - Disk usage via `df -h /`
+  - Current user via `whoami`
+- Configure Telegram credentials in script:
+  - `TELEGRAM_BOT_TOKEN` from `vault_telegram_bot_token`
+  - `TELEGRAM_CHAT_ID` from `vault_telegram_chat_id`
+- Create systemd service file at `/etc/systemd/system/boot-notify.service`:
+  - Type: oneshot
+  - After: network-online.target, tailscaled.service
+  - ExecStart: `/usr/local/bin/boot-notify.sh`
+  - User: root
+- Enable service to run on boot (WantedBy: multi-user.target)
+- Reload systemd daemon and enable service
+- Message format: Markdown-formatted with hostname, OS, network info, hardware specs, timestamp
+- Variables (from `roles/boot_notify_linux/vars/main.yml`):
+  - `telegram_bot_token`: Bot token from vault
+  - `telegram_chat_id`: Chat ID from vault
+  - `service_name`: "boot-notify"
+  - `service_description`: "Boot Notification Service via Telegram"
+  - `script_path`: "/usr/local/bin/boot-notify.sh"
 
 ### Role: `boot_notify_windows`
 
-- Create PowerShell script `boot_notify.ps1` that:
-- Detects OS type (Windows)
-- Gets logged-in user via `$env:USERNAME`
-- Queries Tailscale status via PowerShell (check tailscaled process and parse status)
-- Gets hostname via `$env:COMPUTERNAME`
-- Gets local IP via `Get-NetIPAddress -AddressFamily IPv4 | Select -First 1`
-- Gets CPU count via `(Get-CimInstance Win32_Processor).NumberOfLogicalProcessors`
-- Gets total RAM via `(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB`
-- Gets last reboot via `(Get-CimInstance Win32_OperatingSystem).LastBootUpTime`
-- Constructs formatted message
-- Sends via `Invoke-WebRequest` to Telegram Bot API
-- Register scheduled task (logon trigger) to run as System
-- Message format example: "🪟 Windows Boot | User: bob | Hostname: lab-pc-windows | Local IP: 192.168.1.51 | Tailscale IP: 100.y.y.y (online) | CPU: 8 cores | RAM: 16GB | Last boot: 2025-10-31 10:22:45"
+**Configure scheduled task for boot notifications via Telegram:**
+
+- Create `C:\Scripts` directory
+- Deploy PowerShell script to `C:\Scripts\boot-notify.ps1`
+- Script gathers system information:
+  - Hostname via `$env:COMPUTERNAME`
+  - OS version via `Get-CimInstance Win32_OperatingSystem`
+  - System uptime calculation from LastBootUpTime
+  - Local IP addresses via `Get-NetIPAddress -AddressFamily IPv4`
+  - Tailscale IP and status via `tailscale ip -4` and `tailscale status --json`
+  - CPU count via `Get-CimInstance Win32_Processor`
+  - RAM via `Get-CimInstance Win32_ComputerSystem`
+  - Disk usage via `Get-CimInstance Win32_LogicalDisk`
+  - Current user via `$env:USERNAME`
+  - Windows build and version details
+- Configure Telegram credentials in script via string replacement:
+  - Replace `$TELEGRAM_BOT_TOKEN` with `vault_telegram_bot_token`
+  - Replace `$TELEGRAM_CHAT_ID` with `vault_telegram_chat_id`
+- Create scheduled task using `community.windows.win_scheduled_task`:
+  - Name: "BootNotification"
+  - Trigger: On system boot with 2-minute delay (PT2M)
+  - Action: Execute PowerShell with `-ExecutionPolicy Bypass`
+  - Username: SYSTEM
+  - Run level: highest
+  - State: present and enabled
+- Message format: Markdown-formatted with hostname, OS, network info, hardware specs, timestamp
+- Variables (from `roles/boot_notify_windows/vars/main.yml`):
+  - `telegram_bot_token`: Bot token from vault
+  - `telegram_chat_id`: Chat ID from vault
+  - `task_name`: "BootNotification"
+  - `task_description`: "Send boot notification to Telegram"
+  - `script_path`: "C:\\Scripts\\boot-notify.ps1"
+  - `script_dir`: "C:\\Scripts"
+
+### Role: `ssh_key_management`
+
+**Runtime SSH key generation, deployment, and automatic cleanup (Requirements: 6.3, 6.4):**
+
+- **Generate temporary SSH key pair** on Ansible control node:
+  - Delegate to localhost
+  - Key type: ed25519 (modern, secure, fast)
+  - Location: `/tmp/ansible_admin_key` (temporary)
+  - No passphrase (for automation)
+  - Comment: "ansible_admin@tailnet-automation"
+  - Creates only if not exists (idempotent)
+  - Set restrictive permissions: mode 0600 on private key
+
+- **Deploy public key to target hosts:**
+  - **Windows:**
+    - Create `.ssh` directory: `C:\Users\ansible_admin\.ssh`
+    - Deploy public key to `authorized_keys` file
+    - Set proper Windows ACLs:
+      - Remove inheritance
+      - Remove all existing rules
+      - Grant SYSTEM and ansible_admin full control only
+      - Prevents unauthorized access to authorized_keys
+  - **Linux:**
+    - Create `.ssh` directory: `/home/ansible_admin/.ssh` (mode 0700)
+    - Deploy public key using `ansible.builtin.authorized_key` module
+    - Proper ownership: ansible_admin:ansible_admin
+    - Automatic permission handling by module
+
+- **Verify SSH connectivity:**
+  - Test SSH connection with new key from localhost
+  - Command: `ssh -i /tmp/ansible_admin_key -o StrictHostKeyChecking=no ansible_admin@{{ ansible_host }}`
+  - Fails if connection unsuccessful (prevents cleanup of working keys)
+  - Platform-specific verification for Windows and Linux
+
+- **Automatic cleanup (security best practice):**
+  - Controlled by `ssh_key_auto_cleanup` variable (default: true)
+  - Removes temporary private key: `/tmp/ansible_admin_key`
+  - Removes temporary public key: `/tmp/ansible_admin_key.pub`
+  - Only runs after successful verification
+  - Can be disabled for troubleshooting: set `ssh_key_auto_cleanup: false`
+  - Tagged with 'cleanup' for selective execution
+
+- **Security features:**
+  - Private keys never stored in vault (ephemeral generation)
+  - Keys generated on-demand during deployment
+  - Automatic cleanup prevents key exposure
+  - No permanent storage of private keys
+  - Can be regenerated at any time by re-running playbook
+  - SSH key authentication enforced (no password fallback)
+
+- **Variables (from `roles/ssh_key_management/vars/main.yml`):**
+  - `ssh_key_auto_cleanup`: true (automatic cleanup enabled)
+  - `ssh_key_type`: ed25519 (modern elliptic curve)
+  - `ssh_key_temp_path`: /tmp/ansible_admin_key
+  - `ssh_key_comment`: "ansible_admin@tailnet-automation"
+  - `ssh_verify_timeout`: 10 seconds
+  - `ssh_strict_host_checking`: false (for automation)
 
 ---
 
@@ -456,13 +570,19 @@ sshfs_remote_path: "shared@lab-windows:/{{ windows_shared_drive|lower }}/Shared"
 
 ### `setup-openssh-bootstrap.yml` (PREREQUISITE)
 
-**MUST RUN FIRST on Windows (manually via PowerShell), before any Ansible playbooks**
+**Purpose:** Verifies OpenSSH bootstrap completion and SSH connectivity before main deployment.
 
-- Manual step on Windows (PowerShell as Administrator):
+**MUST RUN AFTER manual OpenSSH installation on Windows**
+
+**Manual bootstrap step on Windows (PowerShell as Administrator):**
 
 ```powershell
-  # Install OpenSSH via Chocolatey
-  choco install openssh -y
+  # Option 1: Install via winget (recommended - gets latest version)
+  winget install --id Microsoft.OpenSSH.Beta --silent --accept-package-agreements --accept-source-agreements
+
+  # Option 2: Fallback to Windows Optional Features if winget unavailable
+  Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+  Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
 
   # Start SSH service
   Start-Service sshd
@@ -475,8 +595,28 @@ sshfs_remote_path: "shared@lab-windows:/{{ windows_shared_drive|lower }}/Shared"
   ssh localhost "echo SSH is working"
 ```
 
-- After this, Ansible can connect via SSH on port 22
-- All subsequent playbooks run via OpenSSH (not WinRM)
+**After manual bootstrap, run verification playbook:**
+
+```bash
+ansible-playbook playbooks/setup-openssh-bootstrap.yml -i inventory/hosts.ini
+```
+
+**What the playbook does:**
+- Displays comprehensive OpenSSH bootstrap instructions
+- Tests SSH connectivity to Windows host (port 22 reachability)
+- Provides clear status messages:
+  - ✅ SSH IS ACCESSIBLE - Ready to proceed with main deployment
+  - ❌ SSH NOT ACCESSIBLE - Complete manual bootstrap steps first
+- Fails with helpful error message if SSH is not ready
+- Guides next steps (preflight-checks.yml, setup-all.yml)
+
+**When to use:**
+- After manually installing OpenSSH on Windows (one-time setup)
+- Before running preflight-checks.yml or setup-all.yml
+- To troubleshoot SSH connectivity issues
+- To verify SSH service is running and accessible
+
+**Note:** This playbook does NOT install OpenSSH (manual step required). It only verifies the installation was successful and SSH is accessible for Ansible automation.
 
 ### `setup-all.yml` (Master)
 
@@ -594,6 +734,20 @@ sshfs_remote_path: "shared@lab-windows:/{{ windows_shared_drive|lower }}/Shared"
 - Hosts: `all`
 - Role: `boot_notify_linux` or `boot_notify_windows` (conditional)
 
+**`setup-ssh-keys.yml`**
+
+- Hosts: `windows_group`, `linux_group`
+- Role: `ssh_key_management`
+- Purpose: Generate, deploy, and verify SSH keys for ansible_admin
+- Features:
+  - Runtime key generation (ed25519)
+  - Cross-platform deployment (Windows + Linux)
+  - SSH connectivity verification
+  - Automatic cleanup of temporary keys
+  - Security summary with next steps
+- Run after initial provisioning to enable SSH key authentication
+- Can be re-run to regenerate keys if needed
+
 ---
 
 ## Execution Workflow
@@ -601,22 +755,33 @@ sshfs_remote_path: "shared@lab-windows:/{{ windows_shared_drive|lower }}/Shared"
 1. **Windows Bootstrap (Manual, One-Time):**
 
 - On Windows PC, open PowerShell as Administrator
-- Run OpenSSH bootstrap (see `setup-openssh-bootstrap.yml` above):
+- Run OpenSSH bootstrap manually:
 
 ```powershell
-     # Install Chocolatey if needed
-     Set-ExecutionPolicy Bypass -Scope Process -Force
-     [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-     iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+     # Option 1: Install via winget (recommended - gets latest version)
+     winget install --id Microsoft.OpenSSH.Beta --silent --accept-package-agreements --accept-source-agreements
 
-     # Install and start OpenSSH
-     choco install openssh -y
+     # Option 2: Fallback to Windows Optional Features if winget unavailable
+     # Requires Windows 10 (1809+) or Windows Server 2019+
+     Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+     Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
+
+     # Start and enable SSH service
      Start-Service sshd
      Set-Service -Name sshd -StartupType Automatic
+
+     # Configure firewall
      New-NetFirewallRule -DisplayName "OpenSSH" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22
 
      # Verify SSH working
      ssh localhost "echo SSH is working"
+```
+
+- Verify bootstrap completion with Ansible:
+
+```bash
+     ansible-playbook playbooks/setup-openssh-bootstrap.yml -i inventory/hosts.ini
+     # Should show: ✅ SSH IS ACCESSIBLE
 ```
 
 2. **Prepare Vault and Inventory:**
@@ -668,7 +833,17 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
 # Step 4: Now use ansible_admin SSH key for ongoing tasks
 ```
 
-4. **Run Preflight Checks (Optional but recommended):**
+4. **Verify OpenSSH Bootstrap (Required):**
+
+```bash
+   # Confirm SSH connectivity to Windows before proceeding
+   ansible-playbook playbooks/setup-openssh-bootstrap.yml -i inventory/hosts.ini
+
+   # Expected output: ✅ SSH IS ACCESSIBLE
+   # If failed: Complete manual OpenSSH bootstrap steps on Windows
+```
+
+5. **Run Preflight Checks (Optional but recommended):**
 
 ```bash
    # Validate environment before deployment
@@ -682,7 +857,7 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
    # - Exits with error if issues found (prevents failed partial deployment)
 ```
 
-5. **Dry-Run (Optional for safety):**
+6. **Dry-Run (Optional for safety):**
 
 ```bash
    # Preview changes without making them
@@ -692,7 +867,7 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
    # Review output for any unexpected changes
 ```
 
-6. **Run Master Playbook (Single Command):**
+7. **Run Master Playbook (Single Command):**
 
 ```bash
    # After OpenSSH bootstrap, inventory configured, and preflight passed:
@@ -710,13 +885,22 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
    # - All in one coordinated run
 ```
 
-7. **Post-Provisioning Security Hardening:**
+8. **Post-Provisioning Security Hardening:**
 
 ```bash
-   # Step 1: Verify SSH connection with ansible_admin works
-   ssh -i /tmp/lab-windows-admin-key -l ansible_admin lab-windows "echo SSH works"
+   # Step 1: Generate and deploy SSH keys for ansible_admin
+   ansible-playbook playbooks/setup-ssh-keys.yml -i inventory/hosts.ini --ask-vault-pass
+   # This will:
+   # - Generate ed25519 SSH key pair at runtime
+   # - Deploy public key to all hosts (Windows + Linux)
+   # - Verify SSH connectivity
+   # - Automatically cleanup temporary private keys (security best practice)
 
-   # Step 2: ROTATE Administrator password (security-critical!)
+   # Step 2: Verify SSH connection with ansible_admin works
+   ansible all -i inventory/hosts.ini -m ping
+   # Should succeed with SSH key authentication
+
+   # Step 3: ROTATE Administrator password (security-critical!)
    # Generate new password OUTSIDE the repo (use secure password manager):
    # - Generate random 32-char password
    # - Store in secure location (1Password, LastPass, etc.) with backup codes
@@ -728,15 +912,15 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
    # Delete/null out: vault_admin_password
    # Leave file encrypted, commit to repo
 
-   # Step 3: DELETE temporary private keys
-   rm /tmp/lab-windows-admin-key /tmp/lab-windows-admin-key.pub
-   # ssh-keygen public key: operator stores securely or discards (public key is safe)
-
    # Step 4: Verify dual-mode transition to SSH
    # (See Dual-Mode Provisioning section for transition procedure)
+   ansible-playbook playbooks/transition-to-ssh.yml -i inventory/hosts.ini --ask-vault-pass
 
    # Step 5: Run ACL idempotence validation
    ansible-playbook playbooks/validate-acls.yml -i inventory/hosts.ini --ask-vault-pass
+
+   # Step 6: Run comprehensive security validation
+   ansible-playbook playbooks/security-validation.yml -i inventory/hosts.ini --ask-vault-pass
 ```
 
    **Optional: Run Individual Playbooks**
@@ -786,16 +970,24 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
 - Uses standard SSH instead of WinRM for ongoing management (more reliable, cross-platform)
 - Set `ansible_connection: ssh`, `ansible_port: 22` in group\_vars (post-provisioning)
 - Authenticate as `ansible_admin` user with SSH key
-- **SSH key deployment (security-hardened runtime generation):**
-- Key generated at runtime: `ssh-keygen -t ed25519 -f /tmp/lab-windows-admin-key -N ""`
-- Public key deployed to Windows `C:\Users\ansible_admin\.ssh\authorized_keys` during provisioning
-- Private key used temporarily for verification, then DELETED: `rm /tmp/lab-windows-admin-key*`
-- Vault does NOT store private key permanently (security best practice)
+- **SSH key deployment (security-hardened runtime generation via ssh_key_management role):**
+  - Key generated at runtime: `ssh-keygen -t ed25519 -f /tmp/ansible_admin_key -N ""`
+  - Public key deployed to Windows `C:\Users\ansible_admin\.ssh\authorized_keys` during provisioning
+  - Proper Windows ACLs applied (SYSTEM and ansible_admin only)
+  - Private key used temporarily for verification, then AUTOMATICALLY DELETED
+  - Vault does NOT store private key permanently (security best practice)
+  - Cleanup controlled by `ssh_key_auto_cleanup` variable (default: true)
+  - Can be regenerated at any time by re-running `setup-ssh-keys.yml`
 - Configure Ansible: `ansible_private_key_file` points to temporary key path during provisioning only
 - Set `ansible_shell_type: cmd` to use Windows CMD shell for Ansible commands
 - Firewall rule allows port 22 inbound (configured by openssh\_setup\_windows role)
-- Test connection: `ssh -i /tmp/lab-windows-admin-key -l ansible_admin lab-windows`
-- Benefits: Minimal credential exposure, ephemeral private keys, strong audit trail
+- Test connection: `ansible all -i inventory/hosts.ini -m ping`
+- Benefits: 
+  - Minimal credential exposure
+  - Ephemeral private keys (never stored permanently)
+  - Strong audit trail
+  - Cross-platform consistency (same key management for Windows and Linux)
+  - Automatic cleanup prevents key leakage
 
 **Windows Shared Folder Setup (SMB):**
 
@@ -905,11 +1097,43 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
 
 3. **Boot notification test:**
 
-- Reboot both systems and confirm Telegram notifications
-- Verify message includes correct OS, user, hostname, Tailscale status
+- **Linux manual test:**
+  ```bash
+  sudo /usr/local/bin/boot-notify.sh
+  ```
+  - Verify Telegram message received with system information
+  - Check systemd service status: `systemctl status boot-notify.service`
+  - View service logs: `journalctl -u boot-notify.service`
+
+- **Windows manual test:**
+  ```powershell
+  powershell.exe -ExecutionPolicy Bypass -File "C:\Scripts\boot-notify.ps1"
+  ```
+  - Verify Telegram message received with system information
+  - Check scheduled task: `Get-ScheduledTask -TaskName "BootNotification"`
+  - View task history: `Get-ScheduledTaskInfo -TaskName "BootNotification"`
+
+- **Full boot test:**
+  - Reboot both systems: `sudo reboot` (Linux), `Restart-Computer` (Windows)
+  - Confirm Telegram notifications arrive within 2-3 minutes of boot
+  - Verify message includes:
+    - Correct OS type and version
+    - Hostname and current user
+    - Local IP addresses
+    - Tailscale IP and online status
+    - Hardware specs (CPU, RAM, disk)
+    - Accurate timestamp
+
+- **Troubleshooting boot notifications:**
+  - No notification: Check bot token and chat ID in vault
+  - Network errors: Verify internet connectivity and Telegram API access
+  - Tailscale offline: Check service dependencies (systemd After= directives)
+  - Linux: Service fails to start - check script permissions (should be 0755)
+  - Windows: Task doesn't run - verify SYSTEM account has script access
 
 4. **Periodic drift detection:**
 
 - Run `validate-acls.yml` monthly to catch permission changes
 - Review SMB mount options with `mount | grep TeamShare`
 - Monitor SSH key expiration for ansible\_admin
+- Verify boot notifications still working after system updates
