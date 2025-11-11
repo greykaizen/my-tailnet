@@ -1,0 +1,11 @@
+---
+# Setup SMB Share on Windows
+# This playbook creates the shared folder structure and configures SMB security
+
+- name: Configure SMB share on Windows
+  hosts: windows_group
+  gather_facts: true
+  
+  roles:
+    - role: samba_share
+      tags: ['smb', 'windows', 'file-sharing']

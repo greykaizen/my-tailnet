@@ -1,0 +1,80 @@
+---
+# SFTP Mount Fallback Role - SFTP Helper Scripts for Individual User Access
+
+- name: Install sshfs package for SFTP mounting
+  ansible.builtin.package:
+    name: sshfs
+    state: present
+  become: true
+
+- name: Deploy mount-sftp-share.sh helper script
+  ansible.builtin.copy:
+    src: mount-sftp-share.sh
+    dest: "{{ sftp_helper_script }}"
+    mode: '0755'
+    owner: root
+    group: root
+  become: true
+
+- name: Deploy umount-sftp-share.sh helper script
+  ansible.builtin.copy:
+    src: umount-sftp-share.sh
+    dest: "{{ sftp_unmount_script }}"
+    mode: '0755'
+    owner: root
+    group: root
+  become: true
+
+- name: Ensure SSH directory exists for team users
+  ansible.builtin.file:
+    path: "/home/{{ item.username }}/.ssh"
+    state: directory
+    mode: '0700'
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+  loop: "{{ team_users }}"
+  become: true
+
+- name: Generate SSH key for team users if not exists
+  ansible.builtin.command:
+    cmd: ssh-keygen -t {{ ssh_key_type }} -f /home/{{ item.username }}/.ssh/id_{{ ssh_key_type }} -N ""
+    creates: /home/{{ item.username }}/.ssh/id_{{ ssh_key_type }}
+  loop: "{{ team_users }}"
+  become: true
+  become_user: "{{ item.username }}"
+
+- name: Set proper permissions on SSH private keys
+  ansible.builtin.file:
+    path: "/home/{{ item.username }}/.ssh/id_{{ ssh_key_type }}"
+    mode: '0600'
+    owner: "{{ item.username }}"
+    group: "{{ item.username }}"
+  loop: "{{ team_users }}"
+  become: true
+
+- name: Read SSH public keys for team users
+  ansible.builtin.slurp:
+    src: "/home/{{ item.username }}/.ssh/id_{{ ssh_key_type }}.pub"
+  loop: "{{ team_users }}"
+  register: ssh_public_keys
+  become: true
+
+- name: Display SFTP setup instructions
+  ansible.builtin.debug:
+    msg: |
+      SFTP fallback system configured successfully.
+      
+      Usage for team members:
+      1. Mount SFTP share: mount-sftp-share.sh <username>
+         Example: mount-sftp-share.sh alice
+      
+      2. Access files at: ~/TeamShare-sftp
+      
+      3. Unmount when done: umount-sftp-share.sh
+      
+      Note: SSH public keys have been generated for each user.
+      Deploy these keys to the Windows host for passwordless authentication.
+
+- name: Save SSH public keys for Windows deployment
+  ansible.builtin.set_fact:
+    sftp_public_keys: "{{ ssh_public_keys.results | map(attribute='content') | map('b64decode') | list }}"

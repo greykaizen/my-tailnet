@@ -1,0 +1,11 @@
+---
+# Mount SMB Share on Linux
+# This playbook configures Linux systems to mount the Windows SMB share
+
+- name: Configure SMB mount on Linux
+  hosts: linux_group
+  gather_facts: true
+  
+  roles:
+    - role: samba_mount
+      tags: ['smb', 'linux', 'file-sharing']
