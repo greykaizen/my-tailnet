@@ -1,0 +1,16 @@
+---
+# Test Windows Group Variables
+
+# Connection settings for test environment
+ansible_connection: ssh
+ansible_shell_type: powershell
+ansible_become_method: runas
+ansible_become_user: Administrator
+
+# Test-specific timeouts
+ansible_timeout: 60
+ansible_command_timeout: 60
+
+# Shared folder settings
+shared_folder_name: "TeamShare"
+shared_folder_description: "Test Team Shared Folder"

@@ -1,0 +1,17 @@
+---
+# Test Windows Host Variables
+
+# Hostname configuration
+windows_hostname: "test-windows"
+
+# Shared folder configuration
+windows_shared_drive: "D"
+windows_shared_path: "D:\\Shared"
+
+# Network configuration
+ansible_host: 192.168.1.100
+ansible_port: 22
+
+# Test environment specific settings
+test_environment: true
+skip_reboot: true
