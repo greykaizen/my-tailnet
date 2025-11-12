@@ -1,0 +1,346 @@
+---
+# Deployment Validation Test Playbook
+# Validates all aspects of the deployment are working correctly
+
+- name: Validate User Accounts
+  hosts: all
+  gather_facts: true
+  vars_files:
+    - "../vars/{{ vault_file | default('vault_test.yml') }}"
+  tasks:
+    - name: Test Windows user accounts
+      win_shell: |
+        $users = @('testuser1', 'testuser2', 'testuser3', 'ansible_admin', 'smbmount')
+        $results = @()
+        foreach ($user in $users) {
+          $exists = Get-LocalUser -Name $user -ErrorAction SilentlyContinue
+          if ($exists) {
+            $results += "$user : EXISTS"
+          } else {
+            $results += "$user : MISSING"
+          }
+        }
+        $results -join "`n"
+      register: windows_users
+      when: ansible_os_family == "Windows"
+
+    - name: Display Windows user validation
+      debug:
+        var: windows_users.stdout_lines
+      when: ansible_os_family == "Windows"
+
+    - name: Test Linux user accounts
+      shell: |
+        for user in testuser1 testuser2 testuser3 ansible_admin; do
+          if id "$user" &>/dev/null; then
+            echo "$user : EXISTS (UID: $(id -u $user))"
+          else
+            echo "$user : MISSING"
+          fi
+        done
+      register: linux_users
+      when: ansible_os_family != "Windows"
+
+    - name: Display Linux user validation
+      debug:
+        var: linux_users.stdout_lines
+      when: ansible_os_family != "Windows"
+
+- name: Validate Group Memberships
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Check Windows TeamShare group
+      win_shell: |
+        $group = Get-LocalGroup -Name "TeamShare" -ErrorAction SilentlyContinue
+        if ($group) {
+          $members = Get-LocalGroupMember -Group "TeamShare" | Select-Object -ExpandProperty Name
+          "TeamShare Group Members:"
+          $members
+        } else {
+          "TeamShare group not found"
+        }
+      register: windows_group
+      when: ansible_os_family == "Windows"
+
+    - name: Display Windows group membership
+      debug:
+        var: windows_group.stdout_lines
+      when: ansible_os_family == "Windows"
+
+    - name: Check Linux groups
+      shell: |
+        echo "smb-users group:"
+        getent group smb-users || echo "Group not found"
+        echo ""
+        echo "sftp-users group:"
+        getent group sftp-users || echo "Group not found"
+      register: linux_groups
+      when: ansible_os_family != "Windows"
+
+    - name: Display Linux group membership
+      debug:
+        var: linux_groups.stdout_lines
+      when: ansible_os_family != "Windows"
+
+- name: Validate File Sharing
+  hosts: windows_group
+  gather_facts: false
+  tasks:
+    - name: Check SMB share exists
+      win_shell: |
+        $share = Get-SmbShare -Name "TeamShare" -ErrorAction SilentlyContinue
+        if ($share) {
+          "Share Name: $($share.Name)"
+          "Share Path: $($share.Path)"
+          "Share Description: $($share.Description)"
+        } else {
+          "TeamShare share not found"
+        }
+      register: smb_share_check
+
+    - name: Display SMB share status
+      debug:
+        var: smb_share_check.stdout_lines
+
+    - name: Check shared folder permissions
+      win_shell: |
+        $path = "D:\Shared"
+        if (Test-Path $path) {
+          $acl = Get-Acl $path
+          "Folder: $path"
+          "Owner: $($acl.Owner)"
+          "Access Rules:"
+          $acl.Access | ForEach-Object {
+            "  $($_.IdentityReference) : $($_.FileSystemRights) ($($_.AccessControlType))"
+          }
+        } else {
+          "Shared folder not found at $path"
+        }
+      register: folder_permissions
+
+    - name: Display folder permissions
+      debug:
+        var: folder_permissions.stdout_lines
+
+- name: Validate SMB Mount on Linux
+  hosts: linux_group
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Check if SMB share is mounted
+      shell: mount | grep TeamShare || echo "Not mounted"
+      register: mount_check
+      changed_when: false
+
+    - name: Display mount status
+      debug:
+        var: mount_check.stdout_lines
+
+    - name: Check mount point permissions
+      stat:
+        path: /mnt/TeamShare
+      register: mount_point
+
+    - name: Display mount point info
+      debug:
+        msg:
+          - "Mount point exists: {{ mount_point.stat.exists }}"
+          - "Is directory: {{ mount_point.stat.isdir | default(false) }}"
+          - "Permissions: {{ mount_point.stat.mode | default('N/A') }}"
+
+    - name: Test file creation in shared folder
+      shell: |
+        if [ -d /mnt/TeamShare ]; then
+          touch /mnt/TeamShare/test_$(date +%s).txt && echo "File creation: SUCCESS" || echo "File creation: FAILED"
+        else
+          echo "Mount point not accessible"
+        fi
+      register: file_test
+      changed_when: false
+
+    - name: Display file creation test
+      debug:
+        var: file_test.stdout
+
+- name: Validate Tailscale Integration
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check Tailscale status (Windows)
+      win_shell: |
+        $service = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+        if ($service) {
+          "Service Status: $($service.Status)"
+          "Startup Type: $($service.StartType)"
+          ""
+          & "C:\Program Files\Tailscale\tailscale.exe" status
+        } else {
+          "Tailscale service not found"
+        }
+      register: tailscale_windows
+      when: ansible_os_family == "Windows"
+      ignore_errors: true
+
+    - name: Display Tailscale status (Windows)
+      debug:
+        var: tailscale_windows.stdout_lines
+      when: ansible_os_family == "Windows"
+
+    - name: Check Tailscale status (Linux)
+      shell: |
+        if command -v tailscale &>/dev/null; then
+          echo "Tailscale installed: YES"
+          echo "Service status:"
+          systemctl status tailscaled --no-pager | head -n 10
+          echo ""
+          echo "Tailscale status:"
+          tailscale status
+        else
+          echo "Tailscale not installed"
+        fi
+      register: tailscale_linux
+      when: ansible_os_family != "Windows"
+      ignore_errors: true
+
+    - name: Display Tailscale status (Linux)
+      debug:
+        var: tailscale_linux.stdout_lines
+      when: ansible_os_family != "Windows"
+
+- name: Validate SSH Access
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check SSH service (Windows)
+      win_service:
+        name: sshd
+      register: ssh_windows
+      when: ansible_os_family == "Windows"
+
+    - name: Display SSH service status (Windows)
+      debug:
+        msg:
+          - "SSH Service: {{ ssh_windows.state }}"
+          - "Startup Type: {{ ssh_windows.start_mode }}"
+      when: ansible_os_family == "Windows"
+
+    - name: Check SSH service (Linux)
+      systemd:
+        name: ssh
+      register: ssh_linux
+      when: ansible_os_family != "Windows"
+
+    - name: Display SSH service status (Linux)
+      debug:
+        msg:
+          - "SSH Service: {{ ssh_linux.status.ActiveState }}"
+          - "Enabled: {{ ssh_linux.status.UnitFileState }}"
+      when: ansible_os_family != "Windows"
+
+- name: Validate Security Settings
+  hosts: windows_group
+  gather_facts: false
+  tasks:
+    - name: Check Guest account status
+      win_shell: |
+        $guest = Get-LocalUser -Name "Guest" -ErrorAction SilentlyContinue
+        if ($guest) {
+          "Guest Account Enabled: $($guest.Enabled)"
+        } else {
+          "Guest account not found"
+        }
+      register: guest_status
+
+    - name: Display Guest account status
+      debug:
+        var: guest_status.stdout
+
+    - name: Check SMB security settings
+      win_shell: |
+        $config = Get-SmbServerConfiguration
+        "SMB1 Enabled: $($config.EnableSMB1Protocol)"
+        "SMB2 Enabled: $($config.EnableSMB2Protocol)"
+        "Encryption: $($config.EncryptData)"
+        "Reject Unencrypted: $($config.RejectUnencryptedAccess)"
+      register: smb_security
+
+    - name: Display SMB security settings
+      debug:
+        var: smb_security.stdout_lines
+
+    - name: Check firewall rules for SMB
+      win_shell: |
+        Get-NetFirewallRule -DisplayName "*SMB*" | 
+        Select-Object DisplayName, Enabled, Direction, Action |
+        Format-Table -AutoSize |
+        Out-String
+      register: firewall_rules
+
+    - name: Display firewall rules
+      debug:
+        var: firewall_rules.stdout_lines
+
+- name: Validate Boot Notification System
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check boot notification (Windows)
+      win_shell: |
+        $task = Get-ScheduledTask -TaskName "BootNotification" -ErrorAction SilentlyContinue
+        if ($task) {
+          "Task Name: $($task.TaskName)"
+          "State: $($task.State)"
+          "Script exists: $(Test-Path 'C:\Scripts\boot-notify.ps1')"
+        } else {
+          "Boot notification task not found"
+        }
+      register: boot_notify_windows
+      when: ansible_os_family == "Windows"
+
+    - name: Display boot notification status (Windows)
+      debug:
+        var: boot_notify_windows.stdout_lines
+      when: ansible_os_family == "Windows"
+
+    - name: Check boot notification (Linux)
+      shell: |
+        if systemctl list-unit-files | grep -q boot-notify; then
+          echo "Service exists: YES"
+          systemctl status boot-notify --no-pager | head -n 10
+          echo ""
+          echo "Script exists: $([ -f /usr/local/bin/boot-notify.sh ] && echo YES || echo NO)"
+        else
+          echo "Boot notification service not found"
+        fi
+      register: boot_notify_linux
+      when: ansible_os_family != "Windows"
+
+    - name: Display boot notification status (Linux)
+      debug:
+        var: boot_notify_linux.stdout_lines
+      when: ansible_os_family != "Windows"
+
+- name: Generate Validation Report
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Create validation report
+      debug:
+        msg:
+          - "========================================="
+          - "DEPLOYMENT VALIDATION REPORT"
+          - "========================================="
+          - ""
+          - "Validation completed for all components:"
+          - "  ✓ User accounts"
+          - "  ✓ Group memberships"
+          - "  ✓ File sharing (SMB)"
+          - "  ✓ Tailscale integration"
+          - "  ✓ SSH access"
+          - "  ✓ Security settings"
+          - "  ✓ Boot notifications"
+          - ""
+          - "Review detailed results above for any issues."
+          - ""
+          - "========================================="
