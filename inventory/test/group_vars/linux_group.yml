@@ -1,0 +1,14 @@
+---
+# Test Linux Group Variables
+
+# Connection settings for test environment
+ansible_connection: ssh
+ansible_become: true
+ansible_become_method: sudo
+
+# Test-specific settings
+ansible_timeout: 60
+ansible_command_timeout: 60
+
+# Package management
+package_manager: apt  # Change to yum/dnf for RHEL-based systems

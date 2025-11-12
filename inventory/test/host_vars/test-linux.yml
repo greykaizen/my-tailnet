@@ -1,0 +1,16 @@
+---
+# Test Linux Host Variables
+
+# Hostname configuration
+linux_hostname: "test-linux"
+
+# SMB mount configuration
+smb_mount_path: "/mnt/TeamShare"
+smb_server: "test-windows"
+
+# Network configuration
+ansible_host: 192.168.1.101
+ansible_port: 22
+
+# Test environment specific settings
+test_environment: true

@@ -1,0 +1,30 @@
+---
+# Test Vault File - Sample Users for Testing
+# This file should be encrypted with: ansible-vault encrypt vars/vault_test.yml
+# Use password: test123 (for testing only)
+
+# Team member accounts for testing
+team_users:
+  - username: testuser1
+    password: "TestPass123!"
+    uid: 2001
+  - username: testuser2
+    password: "TestPass456!"
+    uid: 2002
+  - username: testuser3
+    password: "TestPass789!"
+    uid: 2003
+
+# Service accounts
+ansible_admin_password: "AnsibleAdmin123!"
+smbmount_password: "SmbMount123!"
+
+# Tailscale configuration (use test auth key)
+tailscale_authkey: "tskey-auth-test-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+# Telegram bot configuration (use test bot)
+telegram_bot_token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+telegram_chat_id: "-1001234567890"
+
+# Administrator password (for initial WinRM setup)
+windows_admin_password: "WindowsAdmin123!"
