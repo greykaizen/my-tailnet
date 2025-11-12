@@ -105,9 +105,14 @@ ansible-playbook playbooks/validate-acls.yml -i inventory/hosts.ini --ask-vault-
 ```
 my-tailscale/
 ├── inventory/
-│   ├── hosts.ini              # Target hosts (windows_group, linux_group)
+│   ├── hosts.ini              # Production hosts (windows_group, linux_group)
 │   ├── group_vars/            # OS-specific configuration
-│   └── host_vars/             # Machine-specific configuration
+│   ├── host_vars/             # Machine-specific configuration
+│   └── test/                  # Test environment inventory
+│       ├── hosts.ini          # Test VMs with local network addresses
+│       ├── group_vars/        # Test-specific group variables
+│       ├── host_vars/         # Test-specific host variables
+│       └── README.md          # Test inventory documentation
 ├── roles/
 │   ├── windows_users/         # Windows user account management
 │   ├── linux_users/           # Linux user account management
@@ -173,6 +178,8 @@ ansible-playbook playbooks/security-validation.yml -i inventory/hosts.ini --ask-
 - No permanent storage of private keys in vault
 
 ### Testing & Validation
+
+**Production Environment:**
 ```bash
 # Test connections
 ansible all -i inventory/hosts.ini -u ansible_admin -m ping
@@ -183,6 +190,24 @@ ssh ansible_admin@lab-linux "ls -la /mnt/TeamShare"
 
 # Test SMB access
 smbclient -L //lab-windows -U alice
+```
+
+**Test Environment:**
+```bash
+# Run full test suite
+./scripts/run-full-test-suite.sh
+
+# Test with isolated VMs
+ansible-playbook playbooks/test-full-deployment.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test
+
+# Validate test deployment
+ansible-playbook playbooks/test-validate-deployment.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test
+
+# See docs/TESTING_GUIDE.md for comprehensive testing procedures
 ```
 
 ### Vault Management
@@ -452,10 +477,25 @@ ansible-vault view vars/vault.yml
 ansible-vault rekey vars/vault.yml
 ```
 
+## Testing
+
+The project includes a comprehensive test environment for validating deployments before production:
+
+- **Test Inventory**: `inventory/test/` - Isolated test VMs with local network addresses
+- **Test Vault**: `vars/vault_test.yml` - Sample credentials for testing
+- **Test Playbooks**: Automated validation and deployment testing
+- **Test Scripts**: `scripts/run-full-test-suite.sh` - Complete test automation
+
+See [Test Environment Setup Guide](docs/TEST_ENVIRONMENT_SETUP.md) and [Testing Guide](docs/TESTING_GUIDE.md) for detailed instructions.
+
 ## Documentation
 
 - **README.md** (this file) - Quick start and reference
 - **prd.md** - Comprehensive planning and implementation guide
+- **docs/TEST_ENVIRONMENT_SETUP.md** - Test environment configuration
+- **docs/TESTING_GUIDE.md** - Comprehensive testing procedures
+- **docs/SECURITY_HARDENING.md** - Security best practices
+- **docs/DUAL_MODE_PROVISIONING.md** - WinRM to SSH transition guide
 - **.kiro/specs/tailnet-automation/** - Detailed requirements, design, and tasks
 
 ## License

@@ -36,13 +36,22 @@ my-tailscale/
 ├── README.md
 ├── ansible.cfg
 ├── inventory/
-│   ├── hosts.ini          # Hosts: windows_group, linux_group
+│   ├── hosts.ini          # Production hosts: windows_group, linux_group
 │   ├── group_vars/
 │   │   ├── windows_group.yml
 │   │   └── linux_group.yml
-│   └── host_vars/
-│       ├── lab-windows.yml (or IP)
-│       └── lab-linux.yml (or IP)
+│   ├── host_vars/
+│   │   ├── lab-windows.yml (or IP)
+│   │   └── lab-linux.yml (or IP)
+│   └── test/              # Test environment inventory
+│       ├── hosts.ini      # Test VMs with local network addresses
+│       ├── README.md      # Test inventory documentation
+│       ├── group_vars/
+│       │   ├── windows_group.yml
+│       │   └── linux_group.yml
+│       └── host_vars/
+│           ├── test-windows.yml
+│           └── test-linux.yml
 ├── roles/
 │   ├── windows_users/
 │   │   ├── tasks/main.yml
@@ -82,6 +91,9 @@ my-tailscale/
 │   ├── setup-openssh-bootstrap.yml    # PREREQUISITE - Verify OpenSSH bootstrap completion
 │   ├── preflight-checks.yml           # Validate Tailscale, vault, connectivity before main run
 │   ├── setup-all.yml                  # Master orchestration (after OpenSSH bootstrap)
+│   ├── test-environment-setup.yml     # Test environment validation
+│   ├── test-full-deployment.yml       # Full deployment test
+│   ├── test-validate-deployment.yml   # Post-deployment validation test
 │   ├── setup-windows-users.yml
 │   ├── setup-linux-users.yml
 │   ├── install-tailscale.yml
@@ -93,8 +105,16 @@ my-tailscale/
 │   ├── validate-acls.yml              # ACL idempotence validation test
 │   ├── security-validation.yml        # Comprehensive security audit
 │   └── boot-notifications.yml
+├── scripts/
+│   └── run-full-test-suite.sh         # Automated test suite execution
+├── docs/
+│   ├── TEST_ENVIRONMENT_SETUP.md      # Test environment configuration guide
+│   ├── TESTING_GUIDE.md               # Comprehensive testing procedures
+│   ├── SECURITY_HARDENING.md          # Security best practices
+│   └── DUAL_MODE_PROVISIONING.md      # WinRM to SSH transition guide
 └── vars/
-    └── vault.yml              # Encrypted: passwords, tokens, chat IDs
+    ├── vault.yml              # Encrypted: passwords, tokens, chat IDs (production)
+    └── vault_test.yml         # Encrypted: test credentials (test environment)
 ```
 
 ---
@@ -734,6 +754,28 @@ ansible-playbook playbooks/setup-openssh-bootstrap.yml -i inventory/hosts.ini
 - Hosts: `all`
 - Role: `boot_notify_linux` or `boot_notify_windows` (conditional)
 
+**`test-environment-setup.yml`**
+
+- Hosts: `all`
+- Purpose: Validate test environment prerequisites
+- Checks: VM connectivity, SSH access, network configuration, required packages
+- Run before test deployments to ensure environment is ready
+
+**`test-full-deployment.yml`**
+
+- Hosts: `all`
+- Purpose: Execute full deployment in test environment
+- Uses test inventory: `inventory/test/hosts.ini`
+- Uses test vault: `vars/vault_test.yml`
+- Validates all components in isolated environment
+
+**`test-validate-deployment.yml`**
+
+- Hosts: `all`
+- Purpose: Post-deployment validation in test environment
+- Checks: User accounts, file sharing, Tailscale, security settings
+- Generates test report with pass/fail status
+
 **`setup-ssh-keys.yml`**
 
 - Hosts: `windows_group`, `linux_group`
@@ -1137,3 +1179,156 @@ ansible all -i inventory/hosts.ini -u ansible_admin -m setup -a "filter=ansible_
 - Review SMB mount options with `mount | grep TeamShare`
 - Monitor SSH key expiration for ansible\_admin
 - Verify boot notifications still working after system updates
+
+---
+
+## Test Environment
+
+The project includes a comprehensive test environment for validating deployments before production.
+
+### Test Inventory Structure
+
+**Location:** `inventory/test/`
+
+**Files:**
+- `hosts.ini` - Test VM definitions with local network addresses
+- `group_vars/` - Test-specific group variables
+- `host_vars/` - Test-specific host variables
+- `README.md` - Test inventory documentation
+
+**Test Hosts:**
+```ini
+[windows_group]
+test-windows ansible_host=192.168.1.100
+
+[linux_group]
+test-linux ansible_host=192.168.1.101
+
+[all:vars]
+ansible_connection=ssh
+ansible_user=ansible_admin
+ansible_ssh_private_key_file=~/.ssh/ansible_test_key
+```
+
+### Test Vault
+
+**Location:** `vars/vault_test.yml`
+
+Contains sample credentials for testing:
+- Test user accounts (testuser1, testuser2, testuser3)
+- Test service accounts
+- Test Tailscale auth key
+- Test Telegram bot credentials
+
+**Encryption:**
+```bash
+# Encrypt test vault
+ansible-vault encrypt vars/vault_test.yml
+
+# Use test password: test123 (for testing only)
+echo "test123" > .vault_pass_test
+chmod 600 .vault_pass_test
+```
+
+### Running Tests
+
+**Full Test Suite:**
+```bash
+# Automated test execution
+./scripts/run-full-test-suite.sh
+```
+
+**Individual Test Playbooks:**
+```bash
+# Validate test environment
+ansible-playbook playbooks/test-environment-setup.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test
+
+# Run full deployment test
+ansible-playbook playbooks/test-full-deployment.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test
+
+# Validate deployment
+ansible-playbook playbooks/test-validate-deployment.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test
+```
+
+**Component Testing:**
+```bash
+# Test user creation
+ansible-playbook playbooks/setup-windows-users.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test \
+  -e "vault_file=vault_test.yml"
+
+# Test file sharing
+ansible-playbook playbooks/setup-smb-share.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test \
+  -e "vault_file=vault_test.yml"
+
+# Test Tailscale installation
+ansible-playbook playbooks/install-tailscale.yml \
+  -i inventory/test/hosts.ini \
+  --vault-password-file .vault_pass_test \
+  -e "vault_file=vault_test.yml"
+```
+
+### Test Environment Setup
+
+**Prerequisites:**
+1. Two VMs (Windows and Linux) with local network connectivity
+2. Static IP addresses: 192.168.1.100 (Windows), 192.168.1.101 (Linux)
+3. OpenSSH installed on both systems
+4. Test SSH key generated: `~/.ssh/ansible_test_key`
+
+**Configuration:**
+1. Update `inventory/test/hosts.ini` with actual VM IP addresses
+2. Configure `inventory/test/host_vars/` with VM-specific settings
+3. Create and encrypt `vars/vault_test.yml` with test credentials
+4. Generate test SSH key: `ssh-keygen -t ed25519 -f ~/.ssh/ansible_test_key`
+
+**See Documentation:**
+- `docs/TEST_ENVIRONMENT_SETUP.md` - Detailed setup instructions
+- `docs/TESTING_GUIDE.md` - Comprehensive testing procedures
+- `inventory/test/README.md` - Test inventory usage guide
+
+### Test Scenarios
+
+1. **User Account Creation** - Verify cross-platform user creation with consistent UIDs
+2. **File Sharing** - Test SMB share creation and Linux mounting
+3. **Tailscale Integration** - Verify Tailscale installation and SSH access
+4. **Security Hardening** - Validate security settings and access controls
+5. **Boot Notifications** - Test Telegram notification system
+6. **Idempotence** - Verify playbooks can be re-run safely
+7. **Dual-Mode Provisioning** - Test WinRM to SSH transition
+
+### Test Cleanup
+
+```bash
+# Remove test users
+ansible -i inventory/test/hosts.ini all \
+  -m shell -a "userdel -r testuser1 testuser2 testuser3"
+
+# Unmount test shares
+ansible -i inventory/test/hosts.ini linux_group \
+  -m shell -a "umount /mnt/TeamShare"
+
+# Remove Tailscale
+ansible -i inventory/test/hosts.ini all \
+  -m shell -a "tailscale logout"
+
+# Delete test VMs (use virtualization platform tools)
+```
+
+### Best Practices
+
+1. **Isolate Test Environment** - Use separate network/VLAN from production
+2. **Never Use Test Credentials in Production** - Keep test and production vaults separate
+3. **Test Before Production** - Always validate changes in test environment first
+4. **Automate Testing** - Use test scripts for consistent validation
+5. **Document Test Results** - Keep logs of test runs and issues
+6. **Clean Up After Testing** - Remove test resources to prevent confusion
