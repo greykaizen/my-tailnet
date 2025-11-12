@@ -1,0 +1,257 @@
+---
+# Full Deployment Workflow Test
+# This playbook tests the complete bootstrap → provision → transition → validate cycle
+
+- name: Test Phase 1 - Bootstrap Verification
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 1: Bootstrap Verification"
+          - "========================================="
+
+    - name: Verify OpenSSH bootstrap on Windows
+      command: >
+        ansible-playbook playbooks/setup-openssh-bootstrap.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+      register: bootstrap_result
+      changed_when: false
+
+    - name: Display bootstrap results
+      debug:
+        var: bootstrap_result.stdout_lines
+
+- name: Test Phase 2 - Preflight Checks
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 2: Preflight Checks"
+          - "========================================="
+
+    - name: Run preflight validation
+      command: >
+        ansible-playbook playbooks/preflight-checks.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: preflight_result
+      changed_when: false
+
+    - name: Display preflight results
+      debug:
+        var: preflight_result.stdout_lines
+
+- name: Test Phase 3 - User Account Provisioning
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 3: User Account Provisioning"
+          - "========================================="
+
+    - name: Deploy Windows users
+      command: >
+        ansible-playbook playbooks/setup-windows-users.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: windows_users_result
+      changed_when: false
+
+    - name: Deploy Linux users
+      command: >
+        ansible-playbook playbooks/setup-linux-users.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: linux_users_result
+      changed_when: false
+
+    - name: Display user provisioning results
+      debug:
+        msg:
+          - "Windows users: {{ 'OK' if windows_users_result.rc == 0 else 'FAILED' }}"
+          - "Linux users: {{ 'OK' if linux_users_result.rc == 0 else 'FAILED' }}"
+
+- name: Test Phase 4 - Tailscale Integration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 4: Tailscale Integration"
+          - "========================================="
+
+    - name: Install and configure Tailscale
+      command: >
+        ansible-playbook playbooks/install-tailscale.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: tailscale_result
+      changed_when: false
+
+    - name: Display Tailscale results
+      debug:
+        var: tailscale_result.stdout_lines
+
+- name: Test Phase 5 - File Sharing Setup
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 5: File Sharing Setup"
+          - "========================================="
+
+    - name: Create SMB share on Windows
+      command: >
+        ansible-playbook playbooks/setup-smb-share.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: smb_share_result
+      changed_when: false
+
+    - name: Mount SMB share on Linux
+      command: >
+        ansible-playbook playbooks/mount-smb-linux.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: smb_mount_result
+      changed_when: false
+
+    - name: Display file sharing results
+      debug:
+        msg:
+          - "SMB share: {{ 'OK' if smb_share_result.rc == 0 else 'FAILED' }}"
+          - "SMB mount: {{ 'OK' if smb_mount_result.rc == 0 else 'FAILED' }}"
+
+- name: Test Phase 6 - Boot Notifications
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 6: Boot Notifications"
+          - "========================================="
+
+    - name: Deploy boot notification system
+      command: >
+        ansible-playbook playbooks/boot-notifications.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: boot_notify_result
+      changed_when: false
+
+    - name: Display boot notification results
+      debug:
+        var: boot_notify_result.stdout_lines
+
+- name: Test Phase 7 - Validation and Verification
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 7: Validation and Verification"
+          - "========================================="
+
+    - name: Run ACL validation
+      command: >
+        ansible-playbook playbooks/validate-acls.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+      register: acl_validation_result
+      changed_when: false
+
+    - name: Display ACL validation results
+      debug:
+        var: acl_validation_result.stdout_lines
+
+- name: Test Phase 8 - Idempotence Testing
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_inventory: "inventory/test/hosts.ini"
+  tasks:
+    - name: Display test phase
+      debug:
+        msg:
+          - "========================================="
+          - "PHASE 8: Idempotence Testing"
+          - "========================================="
+
+    - name: Re-run full deployment (check mode)
+      command: >
+        ansible-playbook playbooks/setup-all.yml
+        -i {{ test_inventory }}
+        --vault-password-file .vault_pass_test
+        -e "vault_file=vault_test.yml"
+        --check --diff
+      register: idempotence_result
+      changed_when: false
+
+    - name: Analyze idempotence results
+      debug:
+        msg:
+          - "Idempotence test: {{ 'PASSED' if 'changed=0' in idempotence_result.stdout else 'REVIEW NEEDED' }}"
+          - "Check output above for any unexpected changes"
+
+- name: Final Test Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display final summary
+      debug:
+        msg:
+          - "========================================="
+          - "DEPLOYMENT WORKFLOW TEST COMPLETE"
+          - "========================================="
+          - ""
+          - "All phases completed. Review results above."
+          - ""
+          - "Next Steps:"
+          - "1. Verify all user accounts exist on both systems"
+          - "2. Test file sharing by creating files in /mnt/TeamShare"
+          - "3. Verify Tailscale connectivity with 'tailscale status'"
+          - "4. Check boot notifications in Telegram"
+          - "5. Review security settings and permissions"
+          - ""
+          - "========================================="
