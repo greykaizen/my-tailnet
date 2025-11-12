@@ -1,0 +1,195 @@
+---
+# Test Environment Setup Playbook
+# This playbook validates the test environment is ready for deployment testing
+
+- name: Validate Test Environment Prerequisites
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Check test inventory exists
+      stat:
+        path: "{{ playbook_dir }}/../inventory/test/hosts.ini"
+      register: test_inventory
+      failed_when: not test_inventory.stat.exists
+
+    - name: Check test vault exists
+      stat:
+        path: "{{ playbook_dir }}/../vars/vault_test.yml"
+      register: test_vault
+      failed_when: not test_vault.stat.exists
+
+    - name: Verify test vault is encrypted
+      shell: grep -q 'ANSIBLE_VAULT' "{{ playbook_dir }}/../vars/vault_test.yml"
+      register: vault_encrypted
+      failed_when: vault_encrypted.rc != 0
+      changed_when: false
+
+    - name: Display test environment status
+      debug:
+        msg:
+          - "Test inventory: {{ test_inventory.stat.path }}"
+          - "Test vault: {{ test_vault.stat.path }}"
+          - "Vault encrypted: Yes"
+
+- name: Test Connectivity to All Hosts
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Ping test
+      ping:
+
+    - name: Gather system information
+      debug:
+        msg:
+          - "Hostname: {{ ansible_hostname }}"
+          - "OS Family: {{ ansible_os_family }}"
+          - "Distribution: {{ ansible_distribution | default('N/A') }}"
+          - "IP Address: {{ ansible_default_ipv4.address }}"
+
+- name: Validate Windows Test Host
+  hosts: windows_group
+  gather_facts: true
+  tasks:
+    - name: Check Windows version
+      win_shell: |
+        $os = Get-CimInstance Win32_OperatingSystem
+        "$($os.Caption) - Build $($os.BuildNumber)"
+      register: windows_version
+
+    - name: Display Windows version
+      debug:
+        var: windows_version.stdout_lines
+
+    - name: Check OpenSSH service
+      win_service:
+        name: sshd
+      register: ssh_service
+
+    - name: Verify SSH service is running
+      assert:
+        that:
+          - ssh_service.state == 'running'
+          - ssh_service.start_mode == 'auto'
+        fail_msg: "OpenSSH service is not running or not set to auto-start"
+        success_msg: "OpenSSH service is properly configured"
+
+    - name: Check D: drive exists
+      win_stat:
+        path: "D:\\"
+      register: d_drive
+
+    - name: Verify D: drive availability
+      assert:
+        that: d_drive.stat.exists
+        fail_msg: "D: drive does not exist - required for shared folder"
+        success_msg: "D: drive is available"
+
+    - name: Check available disk space on D:
+      win_shell: |
+        $drive = Get-PSDrive D
+        [math]::Round($drive.Free / 1GB, 2)
+      register: disk_space
+
+    - name: Display disk space
+      debug:
+        msg: "Available space on D: {{ disk_space.stdout | trim }} GB"
+
+- name: Validate Linux Test Host
+  hosts: linux_group
+  gather_facts: true
+  become: true
+  tasks:
+    - name: Check Linux distribution
+      debug:
+        msg: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Check Python version
+      command: python3 --version
+      register: python_version
+      changed_when: false
+
+    - name: Display Python version
+      debug:
+        var: python_version.stdout
+
+    - name: Check required packages
+      package_facts:
+        manager: auto
+
+    - name: Verify sudo access
+      command: sudo -n true
+      changed_when: false
+      register: sudo_check
+
+    - name: Check mount point directory
+      stat:
+        path: /mnt
+      register: mnt_dir
+
+    - name: Verify mount point exists
+      assert:
+        that: mnt_dir.stat.exists and mnt_dir.stat.isdir
+        fail_msg: "/mnt directory does not exist"
+        success_msg: "/mnt directory is available"
+
+- name: Network Connectivity Tests
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Test internet connectivity
+      uri:
+        url: https://www.google.com
+        timeout: 10
+      register: internet_test
+      ignore_errors: true
+
+    - name: Display internet connectivity status
+      debug:
+        msg: "Internet connectivity: {{ 'OK' if internet_test.status == 200 else 'FAILED' }}"
+
+    - name: Test DNS resolution
+      command: nslookup google.com
+      register: dns_test
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display DNS status
+      debug:
+        msg: "DNS resolution: {{ 'OK' if dns_test.rc == 0 else 'FAILED' }}"
+
+- name: Cross-Platform Connectivity Test
+  hosts: linux_group
+  gather_facts: false
+  tasks:
+    - name: Test connectivity to Windows host
+      wait_for:
+        host: "{{ hostvars[groups['windows_group'][0]]['ansible_host'] }}"
+        port: 22
+        timeout: 10
+      register: windows_connectivity
+      ignore_errors: true
+
+    - name: Display Windows connectivity status
+      debug:
+        msg: "Windows SSH connectivity: {{ 'OK' if windows_connectivity is succeeded else 'FAILED' }}"
+
+- name: Summary Report
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display test environment summary
+      debug:
+        msg:
+          - "========================================="
+          - "Test Environment Validation Complete"
+          - "========================================="
+          - ""
+          - "Windows Host: {{ groups['windows_group'][0] }}"
+          - "Linux Host: {{ groups['linux_group'][0] }}"
+          - ""
+          - "Next Steps:"
+          - "1. Review validation results above"
+          - "2. Fix any failed checks"
+          - "3. Run: ansible-playbook playbooks/setup-all.yml -i inventory/test/hosts.ini --vault-password-file .vault_pass_test"
+          - ""
+          - "========================================="
